@@ -14,16 +14,18 @@ export function ExerciseRow({ item, onPress }: { item: ExerciseListItem; onPress
   const { exercise, machine, lastSets, lastPerformedAt, doneToday } = item;
   const perHand = exercise.weightUnit === "per_hand";
 
-  const subtitle =
-    lastSets.length > 0
-      ? formatSets(lastSets, perHand)
-      : machine
-        ? "Inte loggad än"
-        : "Inte loggad än";
+  const subtitle = lastSets.length > 0 ? formatSets(lastSets, perHand) : "Inte loggad än";
 
-  const meta = [machine?.manufacturer, lastPerformedAt ? relativeDay(lastPerformedAt) : null]
-    .filter(Boolean)
-    .join(" · ");
+  // En maskinövning utan maskin på det här gymmet kommer från en plan. Säg det
+  // rakt ut i stället för att låta raden se tom ut — annars ser det ut som en
+  // bugg när viktsteget och progressionen inte hör ihop med någon maskin.
+  const elsewhere = exercise.type === "machine" && !machine;
+
+  const meta = elsewhere
+    ? "Finns inte på det här gymmet"
+    : [machine?.manufacturer, lastPerformedAt ? relativeDay(lastPerformedAt) : null]
+        .filter(Boolean)
+        .join(" · ");
 
   return (
     <Pressable
@@ -54,7 +56,11 @@ export function ExerciseRow({ item, onPress }: { item: ExerciseListItem; onPress
           {subtitle}
         </Text>
         {meta ? (
-          <Text className="mt-0.5 text-[12px] text-muted" numberOfLines={1}>
+          <Text
+            className="mt-0.5 text-[12px]"
+            style={{ color: elsewhere ? colors.danger : colors.muted }}
+            numberOfLines={1}
+          >
             {meta}
           </Text>
         ) : null}

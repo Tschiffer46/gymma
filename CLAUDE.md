@@ -35,10 +35,11 @@ app/
 │   ├── _layout.tsx        Gymma / Följ upp / Planera / Inställningar
 │   ├── index.tsx          GYMMA — startvy (var + hur) eller pågående pass
 │   ├── insights.tsx       Följ upp — skal tills det finns data
-│   ├── plan.tsx           Planera — skal
+│   ├── plan.tsx           Planera — lista över rutiner
 │   └── settings.tsx       Gym (namn, lägg till) + versionsmarkör
 ├── log/[exerciseId].tsx   LOGGVYN — appens hjärta
 ├── session/end.tsx        Avsluta pass: känsla + anteckning
+├── routine/[id].tsx       Redigera plan: namn, lägg till, omordna, ta bort
 └── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 components/  ui.tsx (Card/Button/Chip/Stepper/Empty/Loading) · ExerciseRow.tsx
 lib/
@@ -97,6 +98,25 @@ Volym per muskelgrupp aggregeras däremot över allt.
 Enheten visas alltid explicit i loggvyn (`12 kg/hantel`) — blandas konventionerna blir
 volymkurvan brus. Detta är ett tillägg utöver specen, som bara har `type` och därmed inte kan
 skilja hantlar från skivstång.
+
+### Rutiner är en sparad ordning, aldrig ett krav
+`routine` + `routine_item` (position 0,1,2…) och `session.routine_id`. Designprincip 4 gäller
+fortfarande fullt ut, och det syns i tre val:
+
+- Rutinen har **ingen gymkoppling** — samma "Överkropp" ska gå att köra var som helst.
+- Under ett pass med plan finns alltid fliken **"Alla övningar"** bredvid "Planen". Planen är en
+  genväg, inte en grind.
+- Står en maskin i planen men inte på gymmet visas raden ändå, med texten "Finns inte på det här
+  gymmet" — annars ser planen ut att ha tappat rader. `listExercisesForGym(..., alwaysInclude)`
+  är till för just det.
+
+**Positionerna hålls täta** (0,1,2…) av `removeRoutineItem`, vilket är det som gör
+`moveRoutineItem` till ett enkelt platsbyte med grannen. Inför man luckor går den logiken sönder.
+
+**Omordning sker med upp/ned, inte drag-and-drop.** `react-native-draggable-flatlist` och
+`react-native-reorderable-list` har öppna peer-intervall mot reanimated, men ingen av dem är
+belagt testad mot 4.3.1 (v4 var en omskrivning). Efter NativeWind-incidenten är obeprövade
+beroenden som bara går sönder vid körning inte värda risken för en funktion som två knappar löser.
 
 ### Passets livscykel
 Passet startas **uttryckligen** ("Kör på egen hand" i Gymma-fliken) och avslutas uttryckligen,
@@ -263,19 +283,17 @@ telefonen. Testa den så här:
   pass med start och avslut, känsla + anteckning vid avslut, gymval i startvyn sorterat på
   senast använt, "Senaste gångerna" (tre pass bakåt) i loggvyn, begripligt viktsteg.
   Följ upp och Planera är skal.
-- **Sprint 2.5** — redigera/radera set i efterhand, passhistorik som egen vy.
+- **Sprint 3** ✅ **Planera**: namngivna rutiner, lägg till övningar, omordna med upp/ned, radera.
+  "Följ en plan" i startvyn, planläge under passet med växling till hela biblioteket, och
+  `session.routine_id` så Följ upp senare kan svara på hur ofta varje plan faktiskt körs.
+- **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
   taggen exponerar ett läsbart maskin-ID ersätter det hela OCR-steget.
 - **Sprint 4** — Mistral vision för okända maskiner, fritextinmatning, sammanslagning av
   dubbletter (`merged_into_id` finns redan).
-- **Planera** — namngivna rutiner, dra in övningar, justera ordning. Nya tabeller
-  (`routine`, `routine_item`) + drag-omordning (ny dependency ⇒ nytt bygge).
-  **En plan är en sparad ordning, aldrig ett krav** — designprincip 4 gäller fortfarande:
-  du ska kunna logga vad som helst utanför planen, och maskiner läggs till första gången de
-  används.
 - **Följ upp** — progression per maskin (linje, gymmarkerad), volym per muskelgrupp (stapel),
-  träningsfrekvens. `react-native-svg`.
+  träningsfrekvens. `react-native-svg`. Enda återstående skalet.
 - **Bild per övning/maskin** — `machine.photo_uri` finns redan i schemat; kräver
   `expo-image-picker` (ny native-modul ⇒ nytt bygge). Buntas lämpligen med kameran i sprint 3.
 - **Sprint 6** — JSON-export/import till Filer, felhantering, polering.

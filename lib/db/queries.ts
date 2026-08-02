@@ -10,6 +10,9 @@ import type {
   Gym,
   Machine,
   PastPerformance,
+  Routine,
+  RoutineDetail,
+  RoutineSummary,
   Session,
   SetEntry,
   WeightUnit,
@@ -58,6 +61,7 @@ type SessionRow = Ts & {
   ended_at: string | null;
   feeling: string | null;
   notes: string | null;
+  routine_id: string | null;
 };
 type SetRow = Ts & {
   id: string;
@@ -119,6 +123,7 @@ const toSession = (r: SessionRow): Session => ({
   endedAt: r.ended_at,
   feeling: (r.feeling as Feeling | null) ?? null,
   notes: r.notes,
+  routineId: r.routine_id,
 });
 
 const toSet = (r: SetRow): SetEntry => ({
@@ -407,15 +412,20 @@ async function closeDanglingSessions({ db, now }: Store, exceptId?: string): Pro
  *
  * Eventuella glömda pass stängs först, så man aldrig kan ha två öppna samtidigt.
  */
-export async function startSession(store: Store, gymId: string): Promise<Session> {
+export async function startSession(
+  store: Store,
+  gymId: string,
+  routineId: string | null = null,
+): Promise<Session> {
   const { db, uuid, now } = store;
   await closeDanglingSessions(store);
 
   const t = now();
   const id = uuid();
   await db.runAsync(
-    "INSERT INTO session (id, gym_id, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-    [id, gymId, t, t, t],
+    `INSERT INTO session (id, gym_id, routine_id, started_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, gymId, routineId, t, t, t],
   );
   return {
     id,
@@ -424,6 +434,7 @@ export async function startSession(store: Store, gymId: string): Promise<Session
     endedAt: null,
     feeling: null,
     notes: null,
+    routineId,
     createdAt: t,
     updatedAt: t,
     deletedAt: null,
@@ -619,6 +630,172 @@ export async function deleteSet({ db, now }: Store, setId: string): Promise<void
 }
 
 // ---------------------------------------------------------------------------
+// Rutiner ("Planera")
+// ---------------------------------------------------------------------------
+
+type RoutineRow = Ts & { id: string; name: string };
+
+const toRoutine = (r: RoutineRow): Routine => ({ ...ts(r), id: r.id, name: r.name });
+
+export async function listRoutines({ db }: Store): Promise<RoutineSummary[]> {
+  const rows = await db.getAllAsync<RoutineRow & { n: number }>(
+    `SELECT r.*,
+            (SELECT COUNT(*) FROM routine_item i
+             WHERE i.routine_id = r.id AND i.deleted_at IS NULL) AS n
+     FROM routine r
+     WHERE r.deleted_at IS NULL
+     ORDER BY r.created_at ASC`,
+    [],
+  );
+  return rows.map((r) => ({ ...toRoutine(r), itemCount: r.n }));
+}
+
+export async function createRoutine({ db, uuid, now }: Store, name: string): Promise<string> {
+  const id = uuid();
+  const t = now();
+  await db.runAsync("INSERT INTO routine (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)", [
+    id,
+    name.trim(),
+    t,
+    t,
+  ]);
+  return id;
+}
+
+export async function renameRoutine({ db, now }: Store, id: string, name: string): Promise<void> {
+  await db.runAsync("UPDATE routine SET name = ?, updated_at = ? WHERE id = ?", [
+    name.trim(),
+    now(),
+    id,
+  ]);
+}
+
+/** Mjuk radering av både rutinen och dess rader — passen som följt den rörs inte. */
+export async function deleteRoutine({ db, now }: Store, id: string): Promise<void> {
+  const t = now();
+  await db.runAsync("UPDATE routine SET deleted_at = ?, updated_at = ? WHERE id = ?", [t, t, id]);
+  await db.runAsync(
+    "UPDATE routine_item SET deleted_at = ?, updated_at = ? WHERE routine_id = ? AND deleted_at IS NULL",
+    [t, t, id],
+  );
+}
+
+export async function getRoutine({ db }: Store, id: string): Promise<RoutineDetail | null> {
+  const row = await db.getFirstAsync<RoutineRow>(
+    "SELECT * FROM routine WHERE id = ? AND deleted_at IS NULL",
+    [id],
+  );
+  if (!row) return null;
+
+  const items = await db.getAllAsync<ExerciseRow & { item_id: string; position: number }>(
+    `SELECT e.*, i.id AS item_id, i.position
+     FROM routine_item i
+     JOIN exercise e ON e.id = i.exercise_id
+     WHERE i.routine_id = ? AND i.deleted_at IS NULL AND e.deleted_at IS NULL
+     ORDER BY i.position ASC`,
+    [id],
+  );
+
+  return {
+    ...toRoutine(row),
+    items: items.map((r) => ({ id: r.item_id, position: r.position, exercise: toExercise(r) })),
+  };
+}
+
+/**
+ * Lägger till en övning sist i rutinen.
+ *
+ * Idempotent: samma övning två gånger i en plan är nästan alltid ett feltryck,
+ * och en dubblett skulle göra avbockningen tvetydig.
+ */
+export async function addRoutineItem(
+  { db, uuid, now }: Store,
+  routineId: string,
+  exerciseId: string,
+): Promise<void> {
+  const existing = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM routine_item WHERE routine_id = ? AND exercise_id = ? AND deleted_at IS NULL",
+    [routineId, exerciseId],
+  );
+  if (existing) return;
+
+  const max = await db.getFirstAsync<{ p: number | null }>(
+    "SELECT MAX(position) AS p FROM routine_item WHERE routine_id = ? AND deleted_at IS NULL",
+    [routineId],
+  );
+  const t = now();
+  await db.runAsync(
+    `INSERT INTO routine_item (id, routine_id, exercise_id, position, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [uuid(), routineId, exerciseId, (max?.p ?? -1) + 1, t, t],
+  );
+}
+
+/**
+ * Tar bort en rad och packar ihop positionerna efter den.
+ *
+ * Täta positioner (0,1,2…) är vad som gör flyttlogiken nedan enkel — annars
+ * skulle luckor byggas upp och ordningen bli svår att resonera om.
+ */
+export async function removeRoutineItem(store: Store, itemId: string): Promise<void> {
+  const { db, now } = store;
+  const t = now();
+  const row = await db.getFirstAsync<{ routine_id: string; position: number }>(
+    "SELECT routine_id, position FROM routine_item WHERE id = ?",
+    [itemId],
+  );
+  if (!row) return;
+
+  await db.runAsync("UPDATE routine_item SET deleted_at = ?, updated_at = ? WHERE id = ?", [
+    t,
+    t,
+    itemId,
+  ]);
+  await db.runAsync(
+    `UPDATE routine_item SET position = position - 1, updated_at = ?
+     WHERE routine_id = ? AND deleted_at IS NULL AND position > ?`,
+    [t, row.routine_id, row.position],
+  );
+}
+
+/**
+ * Flyttar en rad ett steg upp eller ned genom att byta plats med grannen.
+ *
+ * Upp/ned i stället för drag-and-drop: det kräver inget nytt beroende ovanpå
+ * reanimated, och en knapp är lättare att träffa än ett långtryck-och-dra.
+ */
+export async function moveRoutineItem(
+  { db, now }: Store,
+  itemId: string,
+  direction: "up" | "down",
+): Promise<void> {
+  const row = await db.getFirstAsync<{ routine_id: string; position: number }>(
+    "SELECT routine_id, position FROM routine_item WHERE id = ? AND deleted_at IS NULL",
+    [itemId],
+  );
+  if (!row) return;
+
+  const targetPos = direction === "up" ? row.position - 1 : row.position + 1;
+  const neighbour = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM routine_item WHERE routine_id = ? AND position = ? AND deleted_at IS NULL",
+    [row.routine_id, targetPos],
+  );
+  if (!neighbour) return; // redan högst upp eller längst ned
+
+  const t = now();
+  await db.runAsync("UPDATE routine_item SET position = ?, updated_at = ? WHERE id = ?", [
+    row.position,
+    t,
+    neighbour.id,
+  ]);
+  await db.runAsync("UPDATE routine_item SET position = ?, updated_at = ? WHERE id = ?", [
+    targetPos,
+    t,
+    itemId,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // Startskärmens lista
 // ---------------------------------------------------------------------------
 
@@ -652,8 +829,18 @@ export async function listExercisesForGym(
   store: Store,
   gymId: string,
   currentSessionId: string | null,
+  /**
+   * Övningar som ska med även om de inte hör hemma på det här gymmet.
+   * Används av planläget: står en maskin i planen ska raden synas även om
+   * maskinen inte finns här, annars ser planen ut att ha tappat övningar.
+   */
+  alwaysInclude: string[] = [],
 ): Promise<ExerciseListItem[]> {
   const { db } = store;
+
+  const extra = alwaysInclude.length
+    ? ` OR e.id IN (${alwaysInclude.map(() => "?").join(",")})`
+    : "";
 
   const rows = await db.getAllAsync<ListRow>(
     `SELECT e.*,
@@ -667,8 +854,8 @@ export async function listExercisesForGym(
      LEFT JOIN machine m
        ON m.exercise_id = e.id AND m.gym_id = ? AND m.deleted_at IS NULL
      WHERE e.deleted_at IS NULL AND e.merged_into_id IS NULL
-       AND (e.type = 'freeweight' OR m.id IS NOT NULL)`,
-    [gymId],
+       AND (e.type = 'freeweight' OR m.id IS NOT NULL${extra})`,
+    [gymId, ...alwaysInclude],
   );
 
   // Senaste passet per övning. Den nakna kolumnen session_id vid sidan av
