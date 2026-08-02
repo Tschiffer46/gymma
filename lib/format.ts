@@ -31,6 +31,15 @@ export function formatSets(
   return sets.map((s) => `${fmtWeight(s.weightKg)}×${s.reps}`).join(", ");
 }
 
+/** Passets längd: "4 min", "47 min", "1 h 12 min". */
+export function formatElapsed(fromIso: string, nowMs: number = Date.now()): string {
+  const minutes = Math.max(0, Math.floor((nowMs - Date.parse(fromIso)) / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
 /** "idag", "igår", "3 dagar sedan", "2 veckor sedan". */
 export function relativeDay(iso: string | null): string {
   if (!iso) return "aldrig";

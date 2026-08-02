@@ -57,11 +57,23 @@ export type Machine = Timestamps & {
   lastUsedAt: string | null;
 };
 
+/** Hur passet kändes. Tre fasta val = ett tryck, inget tangentbord. */
+export type Feeling = "latt" | "lagom" | "tungt";
+
 export type Session = Timestamps & {
   id: string;
   gymId: string;
   startedAt: string;
   endedAt: string | null;
+  feeling: Feeling | null;
+  notes: string | null;
+};
+
+/** Ett tidigare pass för en övning — underlaget till "senaste gångerna". */
+export type PastPerformance = {
+  sessionId: string;
+  performedAt: string;
+  sets: { weightKg: number; reps: number }[];
 };
 
 export type SetEntry = Timestamps & {

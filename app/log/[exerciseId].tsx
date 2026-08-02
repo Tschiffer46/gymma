@@ -13,17 +13,19 @@ import {
   getOrOpenSession,
   lastSets,
   logSet,
+  recentPerformances,
   setsInSession,
   setWeightStep,
   useStore,
   weightStepFor,
   type Exercise,
   type Machine,
+  type PastPerformance,
   type Session,
   type SetEntry,
 } from "@/lib/db";
 import { Button, Loading, Stepper } from "@/components/ui";
-import { fmtWeight, formatSets, weightUnitLabel } from "@/lib/format";
+import { fmtWeight, formatSets, relativeDay, weightUnitLabel } from "@/lib/format";
 import { colors } from "@/lib/theme";
 
 /** Viktmagasin går i olika steg. Tre val räcker och slipper tangentbordet. */
@@ -66,6 +68,7 @@ export default function LogScreen() {
   const [machine, setMachine] = useState<Machine | null>(null);
   const [gymName, setGymName] = useState<string | null>(null);
   const [prev, setPrev] = useState<PrevSet[]>([]);
+  const [history, setHistory] = useState<PastPerformance[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [sets, setSets] = useState<SetEntry[]>([]);
   const [weight, setWeight] = useState(20);
@@ -86,6 +89,7 @@ export default function LogScreen() {
       const m = await getMachine(store, ex.id, gym.id);
       const cur = await getCurrentSession(store, gym.id);
       const previous = await lastSets(store, ex.id, cur?.id ?? null);
+      const past = await recentPerformances(store, ex.id, cur?.id ?? null, 3);
       const inSession = cur ? await setsInSession(store, cur.id, ex.id) : [];
       const fill = prefillFor(inSession.length + 1, previous, inSession, ex);
 
@@ -94,6 +98,7 @@ export default function LogScreen() {
       setMachine(m);
       setGymName(gym.name);
       setPrev(previous);
+      setHistory(past);
       setSession(cur);
       setSets(inSession);
       setStep(weightStepFor(ex, m));
@@ -179,15 +184,33 @@ export default function LogScreen() {
           <Text className="mt-0.5 text-[14px] text-muted">{machine.seatSettings}</Text>
         ) : null}
 
-        <Text className="mt-5 text-[15px] text-muted">
-          {prev.length > 0 ? (
-            <>
-              Förra: <Text className="font-semibold text-ink">{formatSets(prev, perHand)}</Text>
-            </>
-          ) : (
-            "Första gången — sätt en startvikt."
-          )}
-        </Text>
+        {history.length > 0 ? (
+          <View className="mt-6">
+            <Text className="text-[11px] font-semibold uppercase tracking-widest text-muted">
+              Senaste gångerna
+            </Text>
+            <View className="mt-2.5 gap-1.5">
+              {history.map((h, i) => (
+                <View key={h.sessionId} className="flex-row items-baseline gap-3">
+                  <Text
+                    className="text-[13px] text-muted"
+                    style={{ width: 96 }}
+                    numberOfLines={1}
+                  >
+                    {relativeDay(h.performedAt)}
+                  </Text>
+                  <Text
+                    className={`flex-1 text-[15px] ${i === 0 ? "font-semibold text-ink" : "text-muted"}`}
+                  >
+                    {formatSets(h.sets, perHand)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : (
+          <Text className="mt-6 text-[15px] text-muted">Första gången — sätt en startvikt.</Text>
+        )}
 
         {sets.length > 0 ? (
           <View className="mt-5 gap-1.5">
@@ -223,9 +246,11 @@ export default function LogScreen() {
 
       {/* Tumzonen. Allt man rör under passet ligger här nere, fast förankrat. */}
       <View className="gap-2.5 border-t border-line px-4 pb-1 pt-3">
+        {/* Etiketten säger vad knapparna gör, inte vad inställningen heter —
+            "Steg" ensamt gick inte att förstå utan att prova. */}
         <View className="flex-row items-center gap-2">
-          <Text className="text-[12px] font-semibold uppercase tracking-widest text-muted">
-            Steg
+          <Text className="text-[12px] text-muted">
+            <Text className="font-semibold text-ink">+/−</Text> ändrar med
           </Text>
           {STEP_OPTIONS.map((s) => (
             <Pressable
@@ -241,7 +266,7 @@ export default function LogScreen() {
                 className="text-[13px] font-semibold"
                 style={{ color: step === s ? colors.accent : colors.muted }}
               >
-                {fmtWeight(s)}
+                {fmtWeight(s)} kg
               </Text>
             </Pressable>
           ))}

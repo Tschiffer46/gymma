@@ -31,10 +31,15 @@ Vid konflikt vinner principen. De kommer från kravspecen och är hela poängen 
 ```
 app/
 ├── _layout.tsx            DbProvider + laddningsgrind + Stack
-├── index.tsx              "Idag" — avbockningslista, gymväxlare, till inställningar
+├── (tabs)/
+│   ├── _layout.tsx        Gymma / Följ upp / Planera / Inställningar
+│   ├── index.tsx          GYMMA — startvy (var + hur) eller pågående pass
+│   ├── insights.tsx       Följ upp — skal tills det finns data
+│   ├── plan.tsx           Planera — skal
+│   └── settings.tsx       Gym (namn, lägg till) + versionsmarkör
 ├── log/[exerciseId].tsx   LOGGVYN — appens hjärta
-├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
-└── settings.tsx           Gym (namn, lägg till) + versionsmarkör
+├── session/end.tsx        Avsluta pass: känsla + anteckning
+└── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 components/  ui.tsx (Card/Button/Chip/Stepper/Empty/Loading) · ExerciseRow.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
@@ -93,11 +98,18 @@ Enheten visas alltid explicit i loggvyn (`12 kg/hantel`) — blandas konventione
 volymkurvan brus. Detta är ett tillägg utöver specen, som bara har `type` och därmed inte kan
 skilja hantlar från skivstång.
 
-### Pass öppnas implicit
-Ingen start-/stoppknapp. `getOrOpenSession()` (anropas **bara** från loggningsvägen, aldrig från
-listan) återanvänder ett öppet pass inom `SESSION_WINDOW_HOURS` = 6 h, annars stängs gamla pass
-och ett nytt öppnas. Avbockningen på startskärmen är helt enkelt "har den här övningen set i det
-pågående passet".
+### Passets livscykel
+Passet startas **uttryckligen** ("Kör på egen hand" i Gymma-fliken) och avslutas uttryckligen,
+med hur det kändes. Men `getOrOpenSession()` finns kvar som skyddsnät i loggningsvägen: loggar
+man ett set utan öppet pass ska setet aldrig gå förlorat bara för att en knapp inte tryckts.
+
+- `startSession(gymId)` stänger först allt som glömts öppet.
+- `endSession(id, {feeling, notes})` — **pass utan set raderas mjukt i stället för att sparas.**
+  Startar man av misstag ska det inte bli brus i historiken. Samma sak sker för övergivna tomma
+  pass när nästa startas.
+- `getCurrentSession()` har kvar `SESSION_WINDOW_HOURS` = 6 h som bortre gräns, så ett glömt
+  pass inte står öppet i dagar.
+- Avbockningen i listan är helt enkelt "har den här övningen set i det pågående passet".
 
 ## Konventioner
 - **Språk i UI: svenska.** Även kodkommentarer. Tal med decimalkomma (`fmtWeight`).
@@ -247,14 +259,25 @@ telefonen. Testa den så här:
 - **Sprint 1** ✅ Datamodell, seedat bibliotek, avbockningslista, loggvy med förifyllning från
   förra passet, gymväxlare, lägg till maskin/övning, inställningar. Appen går att ta med till
   gymmet.
-- **Sprint 2** — passhistorik, redigera/radera set i efterhand.
+- **Sprint 2** ✅ Fyrflikig navigation (Gymma/Följ upp/Planera/Inställningar), uttryckligt
+  pass med start och avslut, känsla + anteckning vid avslut, gymval i startvyn sorterat på
+  senast använt, "Senaste gångerna" (tre pass bakåt) i loggvyn, begripligt viktsteg.
+  Följ upp och Planera är skal.
+- **Sprint 2.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
   taggen exponerar ett läsbart maskin-ID ersätter det hela OCR-steget.
 - **Sprint 4** — Mistral vision för okända maskiner, fritextinmatning, sammanslagning av
   dubbletter (`merged_into_id` finns redan).
-- **Sprint 5** — progression per maskin (linje, gymmarkerad), volym per muskelgrupp
-  (stapel). `react-native-svg`. Flikmeny införs först här.
+- **Planera** — namngivna rutiner, dra in övningar, justera ordning. Nya tabeller
+  (`routine`, `routine_item`) + drag-omordning (ny dependency ⇒ nytt bygge).
+  **En plan är en sparad ordning, aldrig ett krav** — designprincip 4 gäller fortfarande:
+  du ska kunna logga vad som helst utanför planen, och maskiner läggs till första gången de
+  används.
+- **Följ upp** — progression per maskin (linje, gymmarkerad), volym per muskelgrupp (stapel),
+  träningsfrekvens. `react-native-svg`.
+- **Bild per övning/maskin** — `machine.photo_uri` finns redan i schemat; kräver
+  `expo-image-picker` (ny native-modul ⇒ nytt bygge). Buntas lämpligen med kameran i sprint 3.
 - **Sprint 6** — JSON-export/import till Filer, felhantering, polering.
 
 ## Bygg inte detta

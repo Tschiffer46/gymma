@@ -84,4 +84,14 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX idx_set_entry_session ON set_entry(session_id);
   CREATE INDEX idx_set_entry_exercise ON set_entry(exercise_id, logged_at);
   `,
+
+  // 2 — hur passet kändes.
+  //
+  // Passet får en medveten avslutning i stället för att bara tystna. `feeling`
+  // är ett av tre fasta värden (ett tryck, inget tangentbord) och `notes` är
+  // frivillig fritext. Båda blir underlag för Följ upp-vyn.
+  `
+  ALTER TABLE session ADD COLUMN feeling TEXT;
+  ALTER TABLE session ADD COLUMN notes TEXT;
+  `,
 ];

@@ -41,11 +41,13 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-bg" edges={["bottom", "left", "right"]}>
+    <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32 }}
         keyboardShouldPersistTaps="handled"
       >
+        <Text className="pb-5 pt-2 text-3xl font-bold tracking-tight text-ink">Inställningar</Text>
+
         <SectionLabel>Gym</SectionLabel>
         <Text className="mt-1.5 text-[13px] leading-[18px] text-muted">
           Progression mäts per maskin och gym — 50 kg på en bröstpress är inte 50 kg på en annan.
