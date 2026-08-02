@@ -40,7 +40,9 @@ app/
 ├── log/[exerciseId].tsx   LOGGVYN — appens hjärta
 ├── session/end.tsx        Avsluta pass: känsla + anteckning
 ├── routine/[id].tsx       Redigera plan: namn, lägg till, omordna, ta bort
-└── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
+├── library.tsx            Övningsbibliotek med sök (nås från Inställningar)
+├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
+└── exercise/[id].tsx      Redigera övning: namn, engelskt namn, viktenhet, steg
 components/  ui.tsx (Card/Button/Chip/Stepper/Empty/Loading) · ExerciseRow.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
@@ -67,21 +69,33 @@ stället för en migrering. Tidsstämplar är ISO-8601-text.
 
 ```
 gym         id, name, is_default
-exercise    id, name, type('machine'|'freeweight'), weight_unit('total'|'per_hand'),
-            weight_step, primary_muscles(JSON), secondary_muscles(JSON),
+exercise    id, name, name_en, type('machine'|'freeweight'),
+            weight_unit('total'|'per_hand'), weight_step,
+            primary_muscles(JSON), secondary_muscles(JSON),
             match_key, merged_into_id
 machine     id, gym_id, exercise_id, manufacturer, article_code, ocr_text,
             photo_uri, seat_settings, weight_step, last_used_at
-session     id, gym_id, started_at, ended_at
+session     id, gym_id, routine_id?, started_at, ended_at, feeling, notes
 set_entry   id, session_id, machine_id?, exercise_id, weight_kg, reps, set_index, logged_at
+routine     id, name
+routine_item id, routine_id, exercise_id, position
+session_skip id, session_id, exercise_id      -- överhoppat i ETT pass
 ```
 
 ### Kritiskt: övningsidentitet får aldrig splittras
-Två vägar leder in i appen (manuell inmatning nu, kamera/OCR och fritext i sprint 3–4). Skapar
+Två vägar leder in i appen (manuell inmatning nu, kamera/OCR och fritext i sprint 4–5). Skapar
 de olika poster för samma sak splittras månadstrenden i två halva serier som båda är oanvändbara.
 
 - **Ingen väg får skapa en `exercise` utan att först ha anropat `findExerciseByName()`.**
 - `match_key` = `normalizeName(namn)` — gemener, å/ä/ö vikta till a/a/o, blanksteg borttagna.
+- **`findExerciseByName` matchar även `name_en`.** Maskinskyltarna är på engelska
+  ("CHEST PRESS", "PECTORAL", "LEG PRESS", "LOW ROW" — verifierat på Technogym-utrustningen),
+  biblioteket är svenskt. Utan den matchningen skulle OCR skapa en dubblett varje gång.
+  `updateExercise` skriver om `match_key` när namnet ändras, annars tappar skyddet greppet.
+- **`topUpLibrary()`** (körs vid varje start) fyller i nya standardövningar och saknade
+  `name_en` på telefoner som redan har data — `seedIfEmpty` kör ju bara på tom databas.
+  Den kollar match_key **oavsett `deleted_at`** och återuppväcker därför aldrig något
+  användaren själv tagit bort.
 - `article_code` blir den starkaste matchningsnyckeln när kameran kopplas in (stabil per
   maskinmodell). Kolumnen finns redan.
 - `merged_into_id` finns för "slå ihop dessa två övningar" (sprint 4). Alla listningar filtrerar
@@ -286,6 +300,9 @@ telefonen. Testa den så här:
 - **Sprint 3** ✅ **Planera**: namngivna rutiner, lägg till övningar, omordna med upp/ned, radera.
   "Följ en plan" i startvyn, planläge under passet med växling till hela biblioteket, och
   `session.routine_id` så Följ upp senare kan svara på hur ofta varje plan faktiskt körs.
+- **Sprint 3.1** ✅ Engelska namn på alla övningar (matchas + söks), sök i passets lista, i
+  planredigeraren och i biblioteket, hoppa över övning i planläget (`session_skip`, passspecifikt
+  och överlever appomstart), samt övningsbibliotek i Inställningar med redigering och radering.
 - **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om

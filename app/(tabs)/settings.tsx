@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
-import { ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "expo-router";
+import { Feather } from "@expo/vector-icons";
+import { useFocusEffect, useRouter } from "expo-router";
 import { createGym, listGyms, renameGym, useStore, type Gym } from "@/lib/db";
 import { Button, Card, SectionLabel } from "@/components/ui";
 import { RELEASE } from "@/lib/release";
@@ -13,6 +14,7 @@ import { colors } from "@/lib/theme";
  */
 export default function SettingsScreen() {
   const store = useStore();
+  const router = useRouter();
   const [gyms, setGyms] = useState<Gym[]>([]);
   const [newGym, setNewGym] = useState("");
   const [busy, setBusy] = useState(false);
@@ -79,6 +81,25 @@ export default function SettingsScreen() {
               loading={busy}
             />
           </View>
+        </View>
+
+        <View className="mt-9">
+          <SectionLabel>Övningar</SectionLabel>
+          <Pressable
+            onPress={() => router.push("/library")}
+            accessibilityRole="button"
+            className="mt-2 flex-row items-center gap-3 rounded-[12px] border border-line bg-card px-4 active:opacity-70"
+            style={{ minHeight: 58 }}
+          >
+            <Feather name="list" size={18} color={colors.muted} />
+            <View className="flex-1">
+              <Text className="text-[16px] text-ink">Övningsbibliotek</Text>
+              <Text className="mt-0.5 text-[12.5px] text-muted">
+                Ändra namn, viktenhet och viktsteg. Radera det du aldrig kör.
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={20} color={colors.muted} />
+          </Pressable>
         </View>
 
         <View className="mt-9">

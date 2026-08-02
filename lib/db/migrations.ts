@@ -126,4 +126,29 @@ export const MIGRATIONS: string[] = [
 
   ALTER TABLE session ADD COLUMN routine_id TEXT REFERENCES routine(id);
   `,
+
+  // 4 — engelska namn och överhoppade övningar.
+  //
+  // `name_en` gör två saker på en gång: visar skyltnamnet bredvid det svenska
+  // (Technogym-skyltarna är på engelska) och blir matchningsnyckel för
+  // kamera/OCR i en senare sprint. Utan den skulle "CHEST PRESS" aldrig hitta
+  // "Bänkpress" och månadstrenden splittras i två halva serier.
+  //
+  // `session_skip` är överhoppningar under ett pass. Egen tabell i stället för
+  // komponenttillstånd, så en överhoppning överlever att iOS dödar appen mitt
+  // i passet. Den är medvetet PASSSPECIFIK — att maskinen var upptagen idag
+  // ska inte ändra planen permanent.
+  `
+  ALTER TABLE exercise ADD COLUMN name_en TEXT;
+
+  CREATE TABLE session_skip (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES session(id),
+    exercise_id TEXT NOT NULL REFERENCES exercise(id),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    deleted_at  TEXT
+  );
+  CREATE INDEX idx_session_skip ON session_skip(session_id);
+  `,
 ];

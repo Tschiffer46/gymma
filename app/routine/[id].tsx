@@ -10,6 +10,7 @@ import {
   getActiveGym,
   getRoutine,
   listExercisesForGym,
+  matchesQuery,
   moveRoutineItem,
   removeRoutineItem,
   renameRoutine,
@@ -17,7 +18,7 @@ import {
   type ExerciseListItem,
   type RoutineDetail,
 } from "@/lib/db";
-import { Button, Empty, Loading, SectionLabel } from "@/components/ui";
+import { Button, Empty, Loading, SearchField, SectionLabel } from "@/components/ui";
 import { muscleNames } from "@/lib/muscles";
 import { colors, TAP } from "@/lib/theme";
 
@@ -37,6 +38,7 @@ export default function RoutineScreen() {
   const [available, setAvailable] = useState<ExerciseListItem[]>([]);
   const [name, setName] = useState("");
   const [picking, setPicking] = useState(false);
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -113,7 +115,9 @@ export default function RoutineScreen() {
   }
 
   const inPlan = new Set(routine.items.map((i) => i.exercise.id));
-  const pickable = available.filter((a) => !inPlan.has(a.exercise.id));
+  const pickable = available.filter(
+    (a) => !inPlan.has(a.exercise.id) && matchesQuery(a.exercise, query),
+  );
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["bottom", "left", "right"]}>
@@ -191,9 +195,14 @@ export default function RoutineScreen() {
         {picking ? (
           <View className="mt-8">
             <SectionLabel>Lägg till</SectionLabel>
+            <View className="mt-3">
+              <SearchField value={query} onChange={setQuery} />
+            </View>
             {pickable.length === 0 ? (
               <Text className="mt-3 text-[14px] text-muted">
-                Alla övningar på det aktiva gymmet ligger redan i planen.
+                {query
+                  ? `Ingen övning matchar "${query}".`
+                  : "Alla övningar på det aktiva gymmet ligger redan i planen."}
               </Text>
             ) : (
               <View className="mt-3 gap-2">
@@ -210,11 +219,9 @@ export default function RoutineScreen() {
                       <Text className="text-[16px] text-ink" numberOfLines={1}>
                         {a.exercise.name}
                       </Text>
-                      {a.machine?.manufacturer ? (
-                        <Text className="mt-0.5 text-[12.5px] text-muted">
-                          {a.machine.manufacturer}
-                        </Text>
-                      ) : null}
+                      <Text className="mt-0.5 text-[12.5px] text-muted" numberOfLines={1}>
+                        {[a.exercise.nameEn, a.machine?.manufacturer].filter(Boolean).join(" · ")}
+                      </Text>
                     </View>
                   </Pressable>
                 ))}
