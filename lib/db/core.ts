@@ -86,24 +86,7 @@ export async function seedIfEmpty(store: Store): Promise<boolean> {
     }
 
     for (const ex of SEED_EXERCISES) {
-      await db.runAsync(
-        `INSERT INTO exercise
-           (id, name, type, weight_unit, weight_step, primary_muscles, secondary_muscles,
-            match_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          uuid(),
-          ex.name,
-          ex.type,
-          ex.weightUnit,
-          FREEWEIGHT_STEP,
-          JSON.stringify(ex.primary),
-          JSON.stringify(ex.secondary),
-          normalizeName(ex.name),
-          ts,
-          ts,
-        ],
-      );
+      await insertSeedExercise(store, ex, ts);
     }
     await db.execAsync("COMMIT;");
   } catch (e) {
@@ -114,8 +97,74 @@ export async function seedIfEmpty(store: Store): Promise<boolean> {
   return true;
 }
 
-/** Migrationer + seed. Körs en gång vid appstart. */
+async function insertSeedExercise(
+  { db, uuid }: Store,
+  ex: (typeof SEED_EXERCISES)[number],
+  ts: string,
+): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO exercise
+       (id, name, name_en, type, weight_unit, weight_step, primary_muscles,
+        secondary_muscles, match_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uuid(),
+      ex.name,
+      ex.nameEn,
+      ex.type,
+      ex.weightUnit,
+      FREEWEIGHT_STEP,
+      JSON.stringify(ex.primary),
+      JSON.stringify(ex.secondary),
+      normalizeName(ex.name),
+      ts,
+      ts,
+    ],
+  );
+}
+
+/**
+ * Kompletterar biblioteket på telefoner som redan har data.
+ *
+ * `seedIfEmpty` kör bara på en tom databas, så nya standardövningar och nya
+ * fält (som `name_en`) skulle annars aldrig nå någon som redan installerat
+ * appen. Den här körs vid varje start och är idempotent.
+ *
+ * **Återuppväcker aldrig något användaren tagit bort.** Kontrollen görs på
+ * match_key *oavsett* deleted_at — finns raden, låt den vara.
+ */
+export async function topUpLibrary(store: Store): Promise<{ added: number; named: number }> {
+  const { db, now } = store;
+  const ts = now();
+  let added = 0;
+  let named = 0;
+
+  for (const ex of SEED_EXERCISES) {
+    const key = normalizeName(ex.name);
+    const row = await db.getFirstAsync<{ id: string; name_en: string | null }>(
+      "SELECT id, name_en FROM exercise WHERE match_key = ? LIMIT 1",
+      [key],
+    );
+
+    if (!row) {
+      await insertSeedExercise(store, ex, ts);
+      added++;
+    } else if (row.name_en === null) {
+      await db.runAsync("UPDATE exercise SET name_en = ?, updated_at = ? WHERE id = ?", [
+        ex.nameEn,
+        ts,
+        row.id,
+      ]);
+      named++;
+    }
+  }
+
+  return { added, named };
+}
+
+/** Migrationer + seed + komplettering. Körs en gång vid appstart. */
 export async function initStore(store: Store): Promise<void> {
   await runMigrations(store.db);
-  await seedIfEmpty(store);
+  const seeded = await seedIfEmpty(store);
+  if (!seeded) await topUpLibrary(store);
 }

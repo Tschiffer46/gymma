@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Feather } from "@expo/vector-icons";
 import { colors, TAP } from "@/lib/theme";
@@ -175,6 +175,39 @@ function StepButton({
     >
       <Feather name={icon} size={30} color={colors.ink} />
     </Pressable>
+  );
+}
+
+/**
+ * Sökfält för övningslistor. Matchar både svenskt och engelskt namn — vilket
+ * språk man tänker på beror på om man läser skylten eller minns vad man kallar
+ * övningen.
+ */
+export function SearchField({
+  value,
+  onChange,
+  placeholder = "Sök övning",
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <View className="flex-row items-center gap-2.5 rounded-[12px] border border-line bg-card px-3.5">
+      <Feather name="search" size={17} color={colors.muted} />
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={colors.muted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="search"
+        clearButtonMode="while-editing"
+        className="flex-1 text-[16px] text-ink"
+        style={{ minHeight: 46 }}
+      />
+    </View>
   );
 }
 

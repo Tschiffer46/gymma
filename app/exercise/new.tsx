@@ -35,6 +35,7 @@ export default function NewExerciseScreen() {
 
   const [gym, setGym] = useState<Gym | null>(null);
   const [name, setName] = useState("");
+  const [nameEn, setNameEn] = useState("");
   const [type, setType] = useState<ExerciseType>("machine");
   const [weightUnit, setWeightUnit] = useState<WeightUnit>("total");
   const [step, setStep] = useState(5);
@@ -85,6 +86,7 @@ export default function NewExerciseScreen() {
         existing?.id ??
         (await createExercise(store, {
           name,
+          nameEn: nameEn.trim() || null,
           type,
           weightUnit,
           weightStep: step,
@@ -133,6 +135,22 @@ export default function NewExerciseScreen() {
             Kopplas till befintlig övning "{duplicate}" — historiken hålls ihop.
           </Text>
         ) : null}
+
+        <View className="mt-6">
+          <SectionLabel>Engelskt namn (valfritt)</SectionLabel>
+          <TextInput
+            value={nameEn}
+            onChangeText={setNameEn}
+            placeholder="t.ex. Chest Press"
+            placeholderTextColor={colors.muted}
+            autoCapitalize="words"
+            className="mt-2 rounded-[12px] border border-line bg-card px-4 text-[17px] text-ink"
+            style={{ minHeight: 52 }}
+          />
+          <Text className="mt-2 text-[13px] leading-[18px] text-muted">
+            Skriv av skyltnamnet. Då hittar sökningen övningen oavsett språk.
+          </Text>
+        </View>
 
         <View className="mt-6">
           <SectionLabel>Typ</SectionLabel>

@@ -380,6 +380,110 @@ async function main() {
     .get(routineId);
   eq(orphan.n, 0, "rutinens rader raderas med");
 
+  console.log("Engelska namn");
+  const bench = await q.findExerciseByName(store, "Bänkpress");
+  eq(bench.nameEn, "Bench Press", "seedade övningar har engelskt namn");
+  const viaEnglish = await q.findExerciseByName(store, "BENCH PRESS");
+  ok(viaEnglish && viaEnglish.id === bench.id, "engelskt skyltnamn hittar den svenska övningen");
+  ok(
+    (await q.findExerciseByName(store, "  bench-press ")).id === bench.id,
+    "engelsk matchning tål versaler, bindestreck och blanksteg",
+  );
+  eq(await q.findExerciseByName(store, "Lat Pulldown"), null, "okänt engelskt namn ger null");
+
+  console.log("Komplettering av biblioteket");
+  // Simulera en telefon som installerade före migration 4: nolla ett engelskt
+  // namn och radera en övning som användaren själv tagit bort.
+  const cleared = db
+    .prepare("UPDATE exercise SET name_en = NULL WHERE match_key = ?")
+    .run(normalizeName("Knäböj"));
+  eq(cleared.changes, 1, "testuppsättning: en rad fick sitt engelska namn nollat");
+  const removedByUser = await q.findExerciseByName(store, "Shrugs");
+  await q.deleteExercise(store, removedByUser.id);
+
+  const topped = await core.topUpLibrary(store);
+  eq(topped.named, 1, "saknat engelskt namn fylls i");
+  eq(topped.added, 0, "inget läggs till som redan finns");
+  eq(
+    (await q.findExerciseByName(store, "Knäböj")).nameEn,
+    "Squat",
+    "kompletteringen satte rätt engelskt namn",
+  );
+  eq(
+    await q.findExerciseByName(store, "Shrugs"),
+    null,
+    "en övning användaren raderat återuppväcks ALDRIG av kompletteringen",
+  );
+  eq((await core.topUpLibrary(store)).named, 0, "kompletteringen är idempotent");
+
+  console.log("Sök");
+  eq((await q.listAllExercises(store, "press")).length > 0, true, "sök på svenskt namn ger träff");
+  ok(
+    (await q.listAllExercises(store, "squat")).some((e) => e.name === "Knäböj"),
+    "sök på engelskt namn hittar den svenska övningen",
+  );
+  ok(
+    (await q.listAllExercises(store, "knabo")).some((e) => e.name === "Knäböj"),
+    "sök tål saknade diakriter",
+  );
+  eq((await q.listAllExercises(store, "zzzz")).length, 0, "sök utan träff ger tom lista");
+
+  console.log("Redigera övning");
+  const curl = await q.findExerciseByName(store, "Bicepscurl");
+  await q.updateExercise(store, curl.id, { name: "Hantelcurl", nameEn: "Dumbbell Curl" });
+  eq(await q.findExerciseByName(store, "Bicepscurl"), null, "gamla namnet slutar matcha");
+  eq(
+    (await q.findExerciseByName(store, "hantelcurl")).id,
+    curl.id,
+    "match_key följer med namnbytet",
+  );
+  eq(
+    (await q.findExerciseByName(store, "Dumbbell Curl")).id,
+    curl.id,
+    "nya engelska namnet matchar",
+  );
+
+  console.log("Radering städar planer utan att lämna luckor");
+  const r2 = await q.createRoutine(store, "Ben");
+  const legIds = (await q.listExercisesForGym(store, gyms[0].id, null))
+    .filter((i) => i.exercise.type === "freeweight")
+    .slice(0, 4)
+    .map((i) => i.exercise.id);
+  for (const id of legIds) await q.addRoutineItem(store, r2, id);
+
+  await q.deleteExercise(store, legIds[1]);
+  const after = await q.getRoutine(store, r2);
+  eq(after.items.length, 3, "raderad övning försvinner ur planen");
+  eq(
+    after.items.map((i) => i.position).join(","),
+    "0,1,2",
+    "positionerna packas ihop — annars slutar omordningen fungera vid luckan",
+  );
+  await q.moveRoutineItem(store, after.items[2].id, "up");
+  eq(
+    (await q.getRoutine(store, r2)).items[1].exercise.id,
+    legIds[3],
+    "omordning fungerar efter raderingen",
+  );
+
+  console.log("Hoppa över i pass");
+  const skipSess = await q.startSession(store, gyms[0].id, r2);
+  eq((await q.skippedInSession(store, skipSess.id)).length, 0, "inget överhoppat från start");
+  await q.skipExercise(store, skipSess.id, legIds[0]);
+  await q.skipExercise(store, skipSess.id, legIds[0]);
+  eq((await q.skippedInSession(store, skipSess.id)).length, 1, "dubbelt överhopp räknas en gång");
+  await q.unskipExercise(store, skipSess.id, legIds[0]);
+  eq((await q.skippedInSession(store, skipSess.id)).length, 0, "överhoppet går att ångra");
+
+  await q.skipExercise(store, skipSess.id, legIds[0]);
+  const other = await q.startSession(store, gyms[0].id, r2);
+  eq(
+    (await q.skippedInSession(store, other.id)).length,
+    0,
+    "överhopp är passspecifikt och följer inte med till nästa pass",
+  );
+  await q.endSession(store, other.id, { feeling: null, notes: null });
+
   console.log("");
   if (failures > 0) {
     console.error(`${failures} av ${checks} kontroller misslyckades`);

@@ -3,6 +3,7 @@ import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-na
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import {
   createGym,
   getCurrentSession,
@@ -10,9 +11,13 @@ import {
   listExercisesForGym,
   listGymsByRecentUse,
   listRoutines,
+  matchesQuery,
   sessionSetCount,
   setActiveGym,
+  skipExercise,
+  skippedInSession,
   startSession,
+  unskipExercise,
   useStore,
   type ExerciseListItem,
   type Gym,
@@ -20,7 +25,7 @@ import {
   type Session,
 } from "@/lib/db";
 import { ExerciseRow } from "@/components/ExerciseRow";
-import { Button, Chip, Empty, Loading, SectionLabel } from "@/components/ui";
+import { Button, Chip, Empty, Loading, SearchField, SectionLabel } from "@/components/ui";
 import { formatElapsed, relativeDay } from "@/lib/format";
 import { colors } from "@/lib/theme";
 
@@ -243,7 +248,9 @@ function ActiveSession({ session }: { session: Session }) {
   const [gymName, setGymName] = useState("");
   const [routineName, setRoutineName] = useState<string | null>(null);
   const [planIds, setPlanIds] = useState<string[]>([]);
+  const [skipped, setSkipped] = useState<string[]>([]);
   const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState("");
   const [sets, setSets] = useState(0);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(Date.now());
@@ -269,6 +276,7 @@ function ActiveSession({ session }: { session: Session }) {
     // Planens övningar skickas med så de syns även om maskinen inte står på
     // just det här gymmet — annars ser planen ut att ha tappat rader.
     setItems(await listExercisesForGym(store, session.gymId, session.id, ids));
+    setSkipped(await skippedInSession(store, session.id));
     setSets(await sessionSetCount(store, session.id));
     setLoading(false);
   }, [store, session.gymId, session.id, session.routineId]);
@@ -284,12 +292,32 @@ function ActiveSession({ session }: { session: Session }) {
   // I planläget styr planens ordning; annars listans egen sortering
   // (ej körda först, därefter senast använd).
   const hasPlan = planIds.length > 0;
+  const inPlanMode = hasPlan && !showAll;
   const byId = new Map(items.map((i) => [i.exercise.id, i]));
-  const visible =
-    hasPlan && !showAll
-      ? planIds.map((pid) => byId.get(pid)).filter((i): i is ExerciseListItem => !!i)
-      : items;
-  const planDone = planIds.filter((pid) => byId.get(pid)?.doneToday).length;
+  const skippedSet = new Set(skipped);
+
+  const ordered = inPlanMode
+    ? planIds.map((pid) => byId.get(pid)).filter((i): i is ExerciseListItem => !!i)
+    : items;
+
+  // Överhoppade sjunker till botten i stället för att försvinna, så det går att
+  // ångra sig när maskinen blir ledig.
+  const visible = [...ordered]
+    .filter((i) => matchesQuery(i.exercise, query))
+    .sort((a, b) => Number(skippedSet.has(a.exercise.id)) - Number(skippedSet.has(b.exercise.id)));
+
+  // Överhoppade räknas som avklarade i "3/5 i planen" — annars ser planen
+  // aldrig färdig ut trots att man är klar för dagen.
+  const planDone = planIds.filter(
+    (pid) => byId.get(pid)?.doneToday || skippedSet.has(pid),
+  ).length;
+
+  async function toggleSkip(exerciseId: string) {
+    Haptics.selectionAsync();
+    if (skippedSet.has(exerciseId)) await unskipExercise(store, session.id, exerciseId);
+    else await skipExercise(store, session.id, exerciseId);
+    await load();
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
@@ -325,16 +353,27 @@ function ActiveSession({ session }: { session: Session }) {
         </View>
       ) : null}
 
+      {/* Sök visas bara i den långa listan. I planläget är raderna få och
+          ordningen är hela poängen. */}
+      {!inPlanMode ? (
+        <View className="px-4 pt-3">
+          <SearchField value={query} onChange={setQuery} />
+        </View>
+      ) : null}
+
       {loading ? (
         <Loading />
       ) : (
         <FlatList
           data={visible}
           keyExtractor={(i) => i.exercise.id}
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 }}
           renderItem={({ item }) => (
             <ExerciseRow
               item={item}
+              skipped={skippedSet.has(item.exercise.id)}
+              onToggleSkip={inPlanMode ? () => toggleSkip(item.exercise.id) : undefined}
               onPress={() =>
                 router.push({
                   pathname: "/log/[exerciseId]",
@@ -344,11 +383,19 @@ function ActiveSession({ session }: { session: Session }) {
             />
           )}
           ListEmptyComponent={
-            <Empty
-              icon="list"
-              title="Inga övningar här än"
-              body="Lägg till den första maskinen eller övningen så börjar biblioteket byggas."
-            />
+            query ? (
+              <Empty
+                icon="search"
+                title="Ingen träff"
+                body={`Ingen övning matchar "${query}". Sök funkar på både svenska och engelska namn.`}
+              />
+            ) : (
+              <Empty
+                icon="list"
+                title="Inga övningar här än"
+                body="Lägg till den första maskinen eller övningen så börjar biblioteket byggas."
+              />
+            )
           }
         />
       )}

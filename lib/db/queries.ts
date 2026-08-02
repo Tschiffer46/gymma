@@ -34,6 +34,7 @@ type GymRow = Ts & { id: string; name: string; is_default: number };
 type ExerciseRow = Ts & {
   id: string;
   name: string;
+  name_en: string | null;
   type: string;
   weight_unit: string;
   weight_step: number;
@@ -92,6 +93,7 @@ const toExercise = (r: ExerciseRow): Exercise => ({
   ...ts(r),
   id: r.id,
   name: r.name,
+  nameEn: r.name_en,
   type: r.type as ExerciseType,
   weightUnit: r.weight_unit as WeightUnit,
   weightStep: r.weight_step,
@@ -214,17 +216,141 @@ export async function getExercise({ db }: Store, id: string): Promise<Exercise |
  * serier som båda är oanvändbara.
  */
 export async function findExerciseByName({ db }: Store, name: string): Promise<Exercise | null> {
-  const row = await db.getFirstAsync<ExerciseRow>(
+  const key = normalizeName(name);
+
+  const bySwedish = await db.getFirstAsync<ExerciseRow>(
     "SELECT * FROM exercise WHERE match_key = ? AND deleted_at IS NULL AND merged_into_id IS NULL LIMIT 1",
-    [normalizeName(name)],
+    [key],
   );
-  return row ? toExercise(row) : null;
+  if (bySwedish) return toExercise(bySwedish);
+
+  // Skyltarna på maskinerna är engelska ("CHEST PRESS"), biblioteket svenskt
+  // ("Bänkpress"). Utan det här steget skulle kamera/OCR skapa en dubblett och
+  // splittra månadstrenden i två halva serier.
+  const rows = await db.getAllAsync<ExerciseRow>(
+    "SELECT * FROM exercise WHERE name_en IS NOT NULL AND deleted_at IS NULL AND merged_into_id IS NULL",
+    [],
+  );
+  const byEnglish = rows.find((r) => normalizeName(r.name_en ?? "") === key);
+  return byEnglish ? toExercise(byEnglish) : null;
+}
+
+/**
+ * Hela biblioteket, för redigering i Inställningar.
+ * `q` matchar både svenskt och engelskt namn.
+ */
+export async function listAllExercises({ db }: Store, q = ""): Promise<Exercise[]> {
+  const rows = await db.getAllAsync<ExerciseRow>(
+    `SELECT * FROM exercise
+     WHERE deleted_at IS NULL AND merged_into_id IS NULL
+     ORDER BY name COLLATE NOCASE ASC`,
+    [],
+  );
+  return rows.map(toExercise).filter((e) => matchesQuery(e, q));
+}
+
+/** Fritextfilter mot svenskt och engelskt namn. Diakriter och blanksteg ignoreras. */
+export function matchesQuery(exercise: Exercise, q: string): boolean {
+  const needle = normalizeName(q);
+  if (!needle) return true;
+  return (
+    normalizeName(exercise.name).includes(needle) ||
+    normalizeName(exercise.nameEn ?? "").includes(needle)
+  );
+}
+
+export async function updateExercise(
+  { db, now }: Store,
+  id: string,
+  patch: {
+    name?: string;
+    nameEn?: string | null;
+    weightUnit?: WeightUnit;
+    weightStep?: number;
+  },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (patch.name !== undefined) {
+    // match_key följer alltid namnet — annars tappar dubblettskyddet greppet.
+    sets.push("name = ?", "match_key = ?");
+    params.push(patch.name.trim(), normalizeName(patch.name));
+  }
+  if (patch.nameEn !== undefined) {
+    sets.push("name_en = ?");
+    params.push(patch.nameEn?.trim() || null);
+  }
+  if (patch.weightUnit !== undefined) {
+    sets.push("weight_unit = ?");
+    params.push(patch.weightUnit);
+  }
+  if (patch.weightStep !== undefined) {
+    sets.push("weight_step = ?");
+    params.push(patch.weightStep);
+  }
+  if (sets.length === 0) return;
+
+  sets.push("updated_at = ?");
+  params.push(now(), id);
+  await db.runAsync(`UPDATE exercise SET ${sets.join(", ")} WHERE id = ?`, params);
+}
+
+/**
+ * Mjuk radering. Loggade set behålls — historiken ska inte försvinna för att
+ * man städar bort en övning man aldrig kör.
+ *
+ * Maskiner och planrader som pekar på övningen städas med, annars skulle de bli
+ * rader utan innehåll.
+ */
+export async function deleteExercise(store: Store, id: string): Promise<void> {
+  const { db, now } = store;
+  const t = now();
+
+  // Vilka planer som berörs måste läsas FÖRE raderingen — efteråt går de inte
+  // att hitta.
+  const affected = await db.getAllAsync<{ routine_id: string }>(
+    "SELECT DISTINCT routine_id FROM routine_item WHERE exercise_id = ? AND deleted_at IS NULL",
+    [id],
+  );
+
+  await db.runAsync("UPDATE exercise SET deleted_at = ?, updated_at = ? WHERE id = ?", [t, t, id]);
+  await db.runAsync(
+    "UPDATE machine SET deleted_at = ?, updated_at = ? WHERE exercise_id = ? AND deleted_at IS NULL",
+    [t, t, id],
+  );
+  await db.runAsync(
+    "UPDATE routine_item SET deleted_at = ?, updated_at = ? WHERE exercise_id = ? AND deleted_at IS NULL",
+    [t, t, id],
+  );
+
+  // Positionerna MÅSTE packas ihop igen. moveRoutineItem byter plats med
+  // grannen på position ±1 — lämnar man en lucka slutar omordningen fungera
+  // vid luckan, tyst.
+  for (const { routine_id } of affected) await repackRoutine(store, routine_id);
+}
+
+/** Numrerar om en rutins rader till 0,1,2… så inga luckor finns kvar. */
+async function repackRoutine({ db, now }: Store, routineId: string): Promise<void> {
+  const items = await db.getAllAsync<{ id: string }>(
+    "SELECT id FROM routine_item WHERE routine_id = ? AND deleted_at IS NULL ORDER BY position ASC",
+    [routineId],
+  );
+  const t = now();
+  for (let i = 0; i < items.length; i++) {
+    await db.runAsync("UPDATE routine_item SET position = ?, updated_at = ? WHERE id = ?", [
+      i,
+      t,
+      items[i].id,
+    ]);
+  }
 }
 
 export async function createExercise(
   { db, uuid, now }: Store,
   input: {
     name: string;
+    nameEn?: string | null;
     type: ExerciseType;
     weightUnit: WeightUnit;
     weightStep: number;
@@ -236,12 +362,13 @@ export async function createExercise(
   const t = now();
   await db.runAsync(
     `INSERT INTO exercise
-       (id, name, type, weight_unit, weight_step, primary_muscles, secondary_muscles,
+       (id, name, name_en, type, weight_unit, weight_step, primary_muscles, secondary_muscles,
         match_key, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.name.trim(),
+      input.nameEn?.trim() || null,
       input.type,
       input.weightUnit,
       input.weightStep,
@@ -489,6 +616,59 @@ export async function getOrOpenSession(store: Store, gymId: string): Promise<Ses
   const existing = await getCurrentSession(store, gymId);
   if (existing) return existing;
   return startSession(store, gymId);
+}
+
+// ---------------------------------------------------------------------------
+// Överhoppade övningar
+// ---------------------------------------------------------------------------
+
+/**
+ * Hoppa över en övning i det pågående passet.
+ *
+ * Medvetet **passspecifikt** — att maskinen var upptagen idag ska inte ändra
+ * planen permanent. Vill man ta bort den på riktigt görs det i planredigeraren.
+ *
+ * Sparas i databasen i stället för i komponenttillstånd, så överhoppningen
+ * överlever att iOS dödar appen mitt i passet.
+ */
+export async function skipExercise(
+  { db, uuid, now }: Store,
+  sessionId: string,
+  exerciseId: string,
+): Promise<void> {
+  const existing = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM session_skip WHERE session_id = ? AND exercise_id = ? AND deleted_at IS NULL",
+    [sessionId, exerciseId],
+  );
+  if (existing) return;
+
+  const t = now();
+  await db.runAsync(
+    `INSERT INTO session_skip (id, session_id, exercise_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [uuid(), sessionId, exerciseId, t, t],
+  );
+}
+
+export async function unskipExercise(
+  { db, now }: Store,
+  sessionId: string,
+  exerciseId: string,
+): Promise<void> {
+  const t = now();
+  await db.runAsync(
+    `UPDATE session_skip SET deleted_at = ?, updated_at = ?
+     WHERE session_id = ? AND exercise_id = ? AND deleted_at IS NULL`,
+    [t, t, sessionId, exerciseId],
+  );
+}
+
+export async function skippedInSession({ db }: Store, sessionId: string): Promise<string[]> {
+  const rows = await db.getAllAsync<{ exercise_id: string }>(
+    "SELECT exercise_id FROM session_skip WHERE session_id = ? AND deleted_at IS NULL",
+    [sessionId],
+  );
+  return rows.map((r) => r.exercise_id);
 }
 
 // ---------------------------------------------------------------------------

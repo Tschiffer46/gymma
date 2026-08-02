@@ -32,6 +32,8 @@ export type Gym = Timestamps & {
 export type Exercise = Timestamps & {
   id: string;
   name: string;
+  /** Engelskt namn — det som står på maskinskylten. Söks och matchas mot. */
+  nameEn: string | null;
   type: ExerciseType;
   weightUnit: WeightUnit;
   weightStep: number;
