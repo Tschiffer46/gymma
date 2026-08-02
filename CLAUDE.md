@@ -141,25 +141,72 @@ i minnet — migrationer, seed, idempotens, gymbyte, övningsmatchning, passlogi
 ren JS-ändring → **OTA** (`eas update`, sekunder, ingen byggkvot); native-ändring (ny modul,
 capability, ikon, native-fält i `app.json`) → **bygg + submit** till TestFlight.
 
-### Engångssetup (görs på Macen, en gång)
-```bash
-eas login                  # konto: tschiffer46
-eas init                   # skapar EAS-projektet, skriver projectId i app.json
-eas build -p ios --profile production   # FÖRSTA bygget interaktivt: låt EAS skapa credentials
-eas submit -p ios
-npx eas-cli channel:edit production --branch production   # se nedan
-```
-Sedan: expo.dev → projektet → GitHub → koppla repot.
+### Engångssetup — GJORD 2026-08-02
+Kör inte om detta. Antecknat för spårbarhet:
+
+| Sak | Värde |
+|---|---|
+| EAS-projekt | `7531d681-3148-493d-ae86-2718c7eb810f` (@tschiffer46/gymma) |
+| Bundle-id | `nu.vadskavi.gymma` |
+| Apple Team | `9R6F4TGQF5` (Agile Transition Management AB) |
+| Distributionscertifikat | delas med `vadskavi-laga` — teamgemensamt, korrekt |
+| App Store Connect-namn | `Gymma (08b912)` — "Gymma" var upptaget |
+| ASC API-nyckel | `8PNNF895X6`, delas med laga — teamgemensam |
+| **App Store Connect Apple ID** | **`6797230599`** ← detta är `ascAppId` |
+
+**`ascAppId` är ännu INTE inlagt i `eas.json`.** Värdet står i tabellen ovan; det ska in i
+`submit.production.ios` vid nästa native-bygge. Se fingerprint-avsnittet nedan för varför det
+väntar.
 
 **`channel:edit` är inte valfritt.** I `laga-app` visade det sig att kopplingen channel →
 branch **inte** skapas automatiskt trots samma namn. Symptomet är lömskt: workflowen publicerar
 OTA:er som aldrig når telefonen, och Update Details säger "No deployments for this runtime".
-Gör det direkt så slipper du felsöka det senare.
+```bash
+npx eas-cli channel:edit production --branch production
+```
 
-### När `app.json` har fått en `projectId`
-Lägg samtidigt till `updates.url: "https://u.expo.dev/<projectId>"` och `ascAppId` i
-`eas.json` → `submit.production.ios`. `eas init` respektive `eas submit` skriver oftast dessa
-åt dig; verifiera att de finns innan du litar på OTA-vägen.
+### Fingerprintet avgör bygge vs OTA — vet vad som ligger i det
+`runtimeVersion.policy: "fingerprint"` gör att EAS hashar de native-påverkande delarna av
+projektet. Matchar hashen ett befintligt bygge blir mergen en OTA; annars ett nytt bygge.
+
+**I fingerprintet:** `app.json` (hela expo-konfigen, inklusive `version` och `ios.buildNumber`),
+**`eas.json`**, `.gitignore`, ikonen, config-pluginfilerna, `package.json` → `scripts`, samt
+native-beroendena och autolinking-konfigen.
+
+**Inte i fingerprintet:** allt under `app/`, `lib/`, `components/`, `scripts/`, samt `CLAUDE.md`
+och annan dokumentation. Det är därför en ren kodändring blir en OTA.
+
+**Konsekvens:** varje konfigändring, hur liten den än är, kostar ett bygge ur kvoten. Uppmätt
+2026-08-02 (`npx expo-updates fingerprint:generate --platform ios`):
+
+| Ändring | Hash |
+|---|---|
+| nuläget | `0b4640e4…` |
+| ta bort `ios.buildNumber` | `360bb89c…` |
+| lägga till `ascAppId` i `eas.json` | `0e42107e…` |
+
+**Bunta därför ihop alla konfigändringar i EN commit**, helst tillsammans med en ändring som
+ändå kräver ett nytt bygge (t.ex. en ny native-modul). Att smyga in dem en och en betyder ett
+bygge per ändring.
+
+Två kända, medvetet obehandlade punkter som ska med i nästa native-bygge (sprint 3, kameran):
+- `ascAppId` (`6797230599`) läggs till i `eas.json`
+- `ios.buildNumber` tas bort ur `app.json` — EAS varnar att fältet ignoreras när
+  `appVersionSource: "remote"` är satt, vilket stämmer. Varningen är kosmetisk; den är inte
+  värd ett eget bygge.
+
+### Verifiera OTA-vägen (gör detta innan du litar på den)
+Den här vägen går sönder tyst — workflowen rapporterar en lyckad uppdatering som aldrig når
+telefonen. Testa den så här:
+
+1. Bumpa `RELEASE` i `lib/release.ts`. Filen ligger **utanför** fingerprintet, så mergen blir
+   garanterat en OTA och aldrig ett bygge.
+2. Merga till `main`. På expo.dev → Workflows ska jobbet `publish_update` köra — inte
+   `build_ios`. Kör den bygg-jobbet i stället är fingerprintet oväntat ändrat.
+3. Kallstarta appen **två gånger** på telefonen (första starten hämtar uppdateringen, andra
+   applicerar den) och kolla Inställningar → Version.
+4. Står det gamla värdet kvar: gå till expo.dev → Deploy → Channels → production. Pekar den
+   inte på branch `production` är det felet — kör `channel:edit`-kommandot ovan.
 
 ## Gotchas
 - **`react` MÅSTE matcha `react-native`s renderer.** SDK 56 / RN 0.85.3 ⇒ **react@19.2.3**.
