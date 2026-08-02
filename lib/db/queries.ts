@@ -6,8 +6,10 @@ import type {
   Exercise,
   ExerciseListItem,
   ExerciseType,
+  Feeling,
   Gym,
   Machine,
+  PastPerformance,
   Session,
   SetEntry,
   WeightUnit,
@@ -49,7 +51,14 @@ type MachineRow = Ts & {
   weight_step: number;
   last_used_at: string | null;
 };
-type SessionRow = Ts & { id: string; gym_id: string; started_at: string; ended_at: string | null };
+type SessionRow = Ts & {
+  id: string;
+  gym_id: string;
+  started_at: string;
+  ended_at: string | null;
+  feeling: string | null;
+  notes: string | null;
+};
 type SetRow = Ts & {
   id: string;
   session_id: string;
@@ -108,6 +117,8 @@ const toSession = (r: SessionRow): Session => ({
   gymId: r.gym_id,
   startedAt: r.started_at,
   endedAt: r.ended_at,
+  feeling: (r.feeling as Feeling | null) ?? null,
+  notes: r.notes,
 });
 
 const toSet = (r: SetRow): SetEntry => ({
@@ -142,6 +153,23 @@ export async function getActiveGym({ db }: Store): Promise<Gym | null> {
     [],
   );
   return row ? toGym(row) : null;
+}
+
+/**
+ * Gymmen sorterade efter senast tränade — det du använde sist ligger överst
+ * när du ska välja var du är. Nya gym utan pass hamnar sist.
+ */
+export async function listGymsByRecentUse({ db }: Store): Promise<(Gym & { lastUsedAt: string | null })[]> {
+  const rows = await db.getAllAsync<GymRow & { last_at: string | null }>(
+    `SELECT g.*,
+            (SELECT MAX(s.started_at) FROM session s
+             WHERE s.gym_id = g.id AND s.deleted_at IS NULL) AS last_at
+     FROM gym g
+     WHERE g.deleted_at IS NULL
+     ORDER BY (last_at IS NULL) ASC, last_at DESC, g.created_at ASC`,
+    [],
+  );
+  return rows.map((r) => ({ ...toGym(r), lastUsedAt: r.last_at }));
 }
 
 export async function setActiveGym({ db, now }: Store, gymId: string): Promise<void> {
@@ -342,21 +370,26 @@ export async function getCurrentSession({ db, now }: Store, gymId: string): Prom
 }
 
 /**
- * Passet som nästa set ska hamna i — öppnar ett nytt om det behövs.
+ * Stänger allt som fortfarande står öppet.
  *
- * Anropas bara från loggningsvägen, aldrig från listan, så att appen inte
- * skapar tomma pass bara för att man tittar in.
+ * Sluttiden sätts till sista loggade setet, inte till nu, så gamla glömda pass
+ * inte ser ut att ha pågått i dagar. Pass utan set raderas mjukt i stället —
+ * de uppstår när man trycker "starta" och sedan går därifrån, och de skulle
+ * bara vara brus i historiken.
  */
-export async function getOrOpenSession(store: Store, gymId: string): Promise<Session> {
-  const existing = await getCurrentSession(store, gymId);
-  if (existing) return existing;
-
-  const { db, uuid, now } = store;
+async function closeDanglingSessions({ db, now }: Store, exceptId?: string): Promise<void> {
   const t = now();
+  const guard = exceptId ?? "";
 
-  // Stäng allt som fortfarande står öppet — passet är över när ett nytt börjar.
-  // Sluttiden sätts till sista loggade setet, inte till nu, så gamla pass inte
-  // ser ut att ha pågått i dagar.
+  await db.runAsync(
+    `UPDATE session SET deleted_at = ?, updated_at = ?
+     WHERE ended_at IS NULL AND deleted_at IS NULL AND id != ?
+       AND NOT EXISTS (
+         SELECT 1 FROM set_entry
+         WHERE session_id = session.id AND deleted_at IS NULL)`,
+    [t, t, guard],
+  );
+
   await db.runAsync(
     `UPDATE session
      SET ended_at = COALESCE(
@@ -364,16 +397,87 @@ export async function getOrOpenSession(store: Store, gymId: string): Promise<Ses
             WHERE session_id = session.id AND deleted_at IS NULL),
            started_at),
          updated_at = ?
-     WHERE ended_at IS NULL AND deleted_at IS NULL`,
-    [t],
+     WHERE ended_at IS NULL AND deleted_at IS NULL AND id != ?`,
+    [t, guard],
   );
+}
 
+/**
+ * Startar ett pass medvetet. Anropas från "Kör på egen hand" i Gymma-fliken.
+ *
+ * Eventuella glömda pass stängs först, så man aldrig kan ha två öppna samtidigt.
+ */
+export async function startSession(store: Store, gymId: string): Promise<Session> {
+  const { db, uuid, now } = store;
+  await closeDanglingSessions(store);
+
+  const t = now();
   const id = uuid();
   await db.runAsync(
     "INSERT INTO session (id, gym_id, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
     [id, gymId, t, t, t],
   );
-  return { id, gymId, startedAt: t, endedAt: null, createdAt: t, updatedAt: t, deletedAt: null };
+  return {
+    id,
+    gymId,
+    startedAt: t,
+    endedAt: null,
+    feeling: null,
+    notes: null,
+    createdAt: t,
+    updatedAt: t,
+    deletedAt: null,
+  };
+}
+
+/**
+ * Avslutar passet med hur det kändes.
+ *
+ * Ett pass utan set raderas mjukt i stället för att sparas — startade man av
+ * misstag ska det inte dyka upp i historiken.
+ */
+export async function endSession(
+  { db, now }: Store,
+  sessionId: string,
+  input: { feeling: Feeling | null; notes: string | null },
+): Promise<void> {
+  const t = now();
+  const count = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM set_entry WHERE session_id = ? AND deleted_at IS NULL",
+    [sessionId],
+  );
+
+  if ((count?.n ?? 0) === 0) {
+    await db.runAsync("UPDATE session SET deleted_at = ?, updated_at = ? WHERE id = ?", [t, t, sessionId]);
+    return;
+  }
+
+  await db.runAsync(
+    "UPDATE session SET ended_at = ?, feeling = ?, notes = ?, updated_at = ? WHERE id = ?",
+    [t, input.feeling, input.notes, t, sessionId],
+  );
+}
+
+/** Antal loggade set i passet — visas i passraden. */
+export async function sessionSetCount({ db }: Store, sessionId: string): Promise<number> {
+  const row = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM set_entry WHERE session_id = ? AND deleted_at IS NULL",
+    [sessionId],
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * Passet som nästa set ska hamna i — öppnar ett nytt om det behövs.
+ *
+ * Med en uttrycklig startknapp finns passet nästan alltid redan. Den här är
+ * kvar som skyddsnät: loggar man ett set utan öppet pass ska setet aldrig gå
+ * förlorat bara för att en knapp inte tryckts.
+ */
+export async function getOrOpenSession(store: Store, gymId: string): Promise<Session> {
+  const existing = await getCurrentSession(store, gymId);
+  if (existing) return existing;
+  return startSession(store, gymId);
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +508,52 @@ export async function lastSets(
     [exerciseId, exerciseId, excludeSessionId],
   );
   return rows.map((r) => ({ weightKg: r.weight_kg, reps: r.reps, setIndex: r.set_index }));
+}
+
+/**
+ * De senaste gångerna övningen kördes — ett block per pass, nyast först.
+ *
+ * Driver "Senaste gångerna" i loggvyn. Att se tre pass bakåt i stället för ett
+ * gör det möjligt att se en trend medan man står vid maskinen: gick vikten upp,
+ * eller har den stått still i tre veckor?
+ */
+export async function recentPerformances(
+  { db }: Store,
+  exerciseId: string,
+  excludeSessionId: string | null,
+  limit = 3,
+): Promise<PastPerformance[]> {
+  const sessions = await db.getAllAsync<{ session_id: string; at: string }>(
+    `SELECT session_id, MAX(logged_at) AS at FROM set_entry
+     WHERE exercise_id = ? AND deleted_at IS NULL AND session_id IS NOT ?
+     GROUP BY session_id
+     ORDER BY at DESC
+     LIMIT ?`,
+    [exerciseId, excludeSessionId, limit],
+  );
+  if (sessions.length === 0) return [];
+
+  const placeholders = sessions.map(() => "?").join(",");
+  const rows = await db.getAllAsync<{ session_id: string; weight_kg: number; reps: number }>(
+    `SELECT session_id, weight_kg, reps FROM set_entry
+     WHERE exercise_id = ? AND deleted_at IS NULL AND session_id IN (${placeholders})
+     ORDER BY set_index ASC`,
+    [exerciseId, ...sessions.map((s) => s.session_id)],
+  );
+
+  const bySession = new Map<string, { weightKg: number; reps: number }[]>();
+  for (const r of rows) {
+    const list = bySession.get(r.session_id);
+    const entry = { weightKg: r.weight_kg, reps: r.reps };
+    if (list) list.push(entry);
+    else bySession.set(r.session_id, [entry]);
+  }
+
+  return sessions.map((s) => ({
+    sessionId: s.session_id,
+    performedAt: s.at,
+    sets: bySession.get(s.session_id) ?? [],
+  }));
 }
 
 export async function setsInSession(

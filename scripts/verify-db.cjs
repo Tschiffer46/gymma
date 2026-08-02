@@ -17,6 +17,7 @@ const OUT = path.join(__dirname, "..", ".verify", "lib", "db");
 const core = require(path.join(OUT, "core.js"));
 const q = require(path.join(OUT, "queries.js"));
 const { normalizeName } = require(path.join(OUT, "match.js"));
+const { MIGRATIONS } = require(path.join(OUT, "migrations.js"));
 
 let failures = 0;
 let checks = 0;
@@ -71,7 +72,11 @@ async function main() {
   await core.initStore(store);
 
   const version = db.prepare("PRAGMA user_version").get();
-  eq(version.user_version, 1, "user_version satt till 1 efter migrering");
+  eq(
+    version.user_version,
+    MIGRATIONS.length,
+    `user_version följer antalet migrationer (${MIGRATIONS.length})`,
+  );
 
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -213,6 +218,87 @@ async function main() {
   const softDeleted = db.prepare("SELECT deleted_at FROM set_entry WHERE id = ?").get(logged[2].id);
   ok(softDeleted.deleted_at, "raderingen är mjuk — raden ligger kvar för framtida sync");
   eq((await q.lastSets(store, exId, s2.id)).length, 2, "förifyllningen speglar raderingen");
+
+  console.log("Uttryckligt pass: start och avslut");
+  // s2 öppnades tidigare men fick aldrig något set. Ge det ett, annars städas
+  // det (helt korrekt) bort som tomt och kan inte användas för att testa att
+  // pass MED set stängs i stället för raderas.
+  await q.logSet(store, {
+    sessionId: s2.id,
+    exerciseId: exId,
+    machineId,
+    weightKg: 52.5,
+    reps: 10,
+    setIndex: 1,
+  });
+
+  advanceHours(24);
+  const s3 = await q.startSession(store, gyms[0].id);
+  ok(s3.id !== s2.id, "startSession öppnar ett nytt pass");
+  eq((await q.getCurrentSession(store, gyms[0].id)).id, s3.id, "det nya passet är det pågående");
+
+  const s2closed = db.prepare("SELECT ended_at, deleted_at FROM session WHERE id = ?").get(s2.id);
+  ok(s2closed.ended_at, "föregående pass stängdes av startSession");
+  ok(!s2closed.deleted_at, "pass MED set raderas inte");
+
+  advanceHours(0.5);
+  await q.logSet(store, {
+    sessionId: s3.id,
+    exerciseId: exId,
+    machineId,
+    weightKg: 55,
+    reps: 8,
+    setIndex: 1,
+  });
+  eq(await q.sessionSetCount(store, s3.id), 1, "sessionSetCount räknar rätt");
+
+  await q.endSession(store, s3.id, { feeling: "tungt", notes: "Sista setet tog i" });
+  const ended = db
+    .prepare("SELECT ended_at, feeling, notes, deleted_at FROM session WHERE id = ?")
+    .get(s3.id);
+  ok(ended.ended_at, "endSession sätter sluttid");
+  eq(ended.feeling, "tungt", "känslan sparas");
+  eq(ended.notes, "Sista setet tog i", "kommentaren sparas");
+  ok(!ended.deleted_at, "avslutat pass med set behålls");
+  eq(await q.getCurrentSession(store, gyms[0].id), null, "inget pass pågår efter avslut");
+
+  console.log("Tomma pass städas bort");
+  const empty = await q.startSession(store, gyms[0].id);
+  await q.endSession(store, empty.id, { feeling: null, notes: null });
+  const emptyRow = db.prepare("SELECT deleted_at FROM session WHERE id = ?").get(empty.id);
+  ok(emptyRow.deleted_at, "pass utan set raderas vid avslut i stället för att sparas");
+
+  const abandoned = await q.startSession(store, gyms[0].id);
+  const replacing = await q.startSession(store, gyms[0].id);
+  const abandonedRow = db.prepare("SELECT deleted_at FROM session WHERE id = ?").get(abandoned.id);
+  ok(abandonedRow.deleted_at, "övergivet tomt pass städas bort när nästa startas");
+  await q.endSession(store, replacing.id, { feeling: null, notes: null });
+
+  console.log("Senaste gångerna");
+  const recent = await q.recentPerformances(store, exId, null, 3);
+  eq(recent.length, 3, "tre tidigare pass hittas");
+  ok(
+    recent[0].performedAt > recent[1].performedAt && recent[1].performedAt > recent[2].performedAt,
+    "nyast först",
+  );
+  eq(recent[0].sets.length, 1, "senaste passet hade ett set");
+  eq(recent[0].sets[0].weightKg, 55, "senaste passets vikt stämmer");
+  // Det äldsta passet loggade tre set men ett ångrades längre upp i testet.
+  // Att bara två syns här bevisar att den mjuka raderingen slår igenom hela
+  // vägen ut i historiken.
+  eq(recent[2].sets.length, 2, "ångrat set syns inte i historiken");
+  eq(
+    (await q.recentPerformances(store, exId, recent[0].sessionId, 3)).length,
+    2,
+    "det uteslutna passet räknas inte med",
+  );
+  eq((await q.recentPerformances(store, exId, null, 1)).length, 1, "limit respekteras");
+
+  console.log("Gym sorterade efter senast använda");
+  const byUse = await q.listGymsByRecentUse(store);
+  eq(byUse.length, 2, "alla gym listas");
+  eq(byUse[0].id, gyms[0].id, "det senast tränade gymmet ligger överst");
+  eq(byUse[1].lastUsedAt, null, "ett aldrig använt gym saknar tidsstämpel och hamnar sist");
 
   console.log("");
   if (failures > 0) {
