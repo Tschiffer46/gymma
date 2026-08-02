@@ -7,6 +7,8 @@
     "ios": "expo start --ios",
     "android": "expo start --android",
     "typecheck": "tsc --noEmit",
+    "verify": "npm run verify:deps && npm run typecheck && npm run test:db",
+    "verify:deps": "node scripts/verify-deps.cjs",
     "test:db": "tsc lib/db/core.ts lib/db/queries.ts lib/db/migrations.ts lib/db/seed.ts lib/db/match.ts lib/db/types.ts --outDir .verify --rootDir . --module commonjs --target es2022 --moduleResolution node --skipLibCheck --ignoreConfig --ignoreDeprecations 6.0 && node scripts/verify-db.cjs"
   },
   "dependencies": {
@@ -24,10 +26,10 @@
     "expo-sqlite": "~56.0.5",
     "expo-status-bar": "~56.0.4",
     "expo-updates": "~56.0.18",
-    "nativewind": "^4.1.23",
+    "nativewind": "4.1.23",
     "react": "19.2.3",
     "react-native": "0.85.3",
-    "react-native-css-interop": "^0.1.22",
+    "react-native-css-interop": "0.1.22",
     "react-native-gesture-handler": "~2.31.1",
     "react-native-reanimated": "4.3.1",
     "react-native-safe-area-context": "~5.7.0",

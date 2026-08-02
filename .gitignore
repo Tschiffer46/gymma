@@ -2,6 +2,12 @@ node_modules/
 .expo/
 dist/
 .verify/
+
+# Genereras av `expo prebuild` / `expo run:ios` (t.ex. när iOS-simulatorn i
+# Claude Code Desktop bygger appen). Vi kör managed workflow — mapparna ska
+# aldrig committas, de återskapas från app.json.
+/ios/
+/android/
 npm-debug.*
 *.jks
 *.p8
