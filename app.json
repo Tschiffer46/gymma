@@ -10,6 +10,9 @@
     "runtimeVersion": {
       "policy": "fingerprint"
     },
+    "updates": {
+      "url": "https://u.expo.dev/7531d681-3148-493d-ae86-2718c7eb810f"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nu.vadskavi.gymma",
