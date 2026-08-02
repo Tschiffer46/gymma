@@ -127,10 +127,16 @@ node scripts/make-icon.cjs       # regenerera platshållarikonen
 ```
 
 ## Verifiering före commit
-Ingen simulator finns i Claude-sessioner. Kör alltid alla tre:
+Ingen simulator finns i Claude-web-sessioner. Kör alltid:
 ```bash
-npm run typecheck && npm run test:db && npx expo export --platform ios
+npm run verify && npx expo export --platform ios
 ```
+`verify` = `verify:deps` + `typecheck` + `test:db`.
+
+**Dessa bevisar inte att appen ser rätt ut.** Sprint 1 gick till TestFlight med all styling död
+medan alla tre var gröna (se NativeWind-punkten under Gotchas). Den enda kontroll som fångar
+den klassen av fel är att titta på appen — iOS-simulatorn i Claude Code Desktop på Macen, eller
+`npx expo start` + `i`. Gör det innan något går till TestFlight.
 `test:db` kompilerar `lib/db/*` till CJS i `.verify/` och kör dem mot en riktig SQLite-databas
 i minnet — migrationer, seed, idempotens, gymbyte, övningsmatchning, passlogik, förifyllning
 över dygnsgräns och soft delete. Riktig runtime-verifiering sker först på telefonen.
@@ -152,11 +158,7 @@ Kör inte om detta. Antecknat för spårbarhet:
 | Distributionscertifikat | delas med `vadskavi-laga` — teamgemensamt, korrekt |
 | App Store Connect-namn | `Gymma (08b912)` — "Gymma" var upptaget |
 | ASC API-nyckel | `8PNNF895X6`, delas med laga — teamgemensam |
-| **App Store Connect Apple ID** | **`6797230599`** ← detta är `ascAppId` |
-
-**`ascAppId` är ännu INTE inlagt i `eas.json`.** Värdet står i tabellen ovan; det ska in i
-`submit.production.ios` vid nästa native-bygge. Se fingerprint-avsnittet nedan för varför det
-väntar.
+| **App Store Connect Apple ID** | **`6797230599`** — ligger som `ascAppId` i `eas.json` |
 
 **`channel:edit` är inte valfritt.** I `laga-app` visade det sig att kopplingen channel →
 branch **inte** skapas automatiskt trots samma namn. Symptomet är lömskt: workflowen publicerar
@@ -185,15 +187,17 @@ och annan dokumentation. Det är därför en ren kodändring blir en OTA.
 | ta bort `ios.buildNumber` | `360bb89c…` |
 | lägga till `ascAppId` i `eas.json` | `0e42107e…` |
 
+**`package.json` → `scripts` ingår också** — att lägga till ett npm-script tvingar fram ett
+bygge. Uppmätt: att lägga till `verify` och `verify:deps` ändrade hashen till `aa115364…`
+medan beroendeändringen i samma commit var helt fingerprint-neutral.
+
 **Bunta därför ihop alla konfigändringar i EN commit**, helst tillsammans med en ändring som
 ändå kräver ett nytt bygge (t.ex. en ny native-modul). Att smyga in dem en och en betyder ett
 bygge per ändring.
 
-Två kända, medvetet obehandlade punkter som ska med i nästa native-bygge (sprint 3, kameran):
-- `ascAppId` (`6797230599`) läggs till i `eas.json`
-- `ios.buildNumber` tas bort ur `app.json` — EAS varnar att fältet ignoreras när
-  `appVersionSource: "remote"` är satt, vilket stämmer. Varningen är kosmetisk; den är inte
-  värd ett eget bygge.
+Det gjordes 2026-08-02: NativeWind-fixen krävde nya npm-scripts, och då följde `ascAppId`,
+borttaget `ios.buildNumber` och `/ios` + `/android` i `.gitignore` med i samma bygge. Konfigen
+har därmed ingen känd skuld kvar.
 
 ### Verifiera OTA-vägen (gör detta innan du litar på den)
 Den här vägen går sönder tyst — workflowen rapporterar en lyckad uppdatering som aldrig når
@@ -217,6 +221,17 @@ telefonen. Testa den så här:
 - **Ny native dependency ⇒ nytt EAS-bygge.** En ny native-modul finns inte i en redan byggd
   binär; en OTA kan inte leverera den. `runtimeVersion.policy: "fingerprint"` ser till att EAS
   tvingar fram ett bygge i stället för att skicka en trasig OTA.
+- **`nativewind` och `react-native-css-interop` MÅSTE vara pinnade exakt** — inget `^`, inget
+  `~`. `npm run verify:deps` failar om någon återinför ett caret.
+  **Detta har redan kostat ett trasigt TestFlight-bygge** (2026-08-02): `nativewind: "^4.1.23"`
+  löstes vid en ny installation till 4.2.6, som kräver `react-native-css-interop@0.2.6`, medan
+  vår direkta dependency krävde `0.1.22`. npm installerade **båda kopiorna**, babel-transformen
+  och runtime-registret hamnade i olika, och **all `className`-styling blev tyst verkningslös** —
+  inline-styles fungerade, klasser inte. `tsc`, `test:db` och `expo export` gick alla igenom.
+  Felet upptäcktes på ett foto av telefonen.
+  Fungerande kombination: `nativewind@4.1.23` + `react-native-css-interop@0.1.22` (samma som
+  `laga-app` faktiskt skickar i produktion). Obs: `laga-app` deklarerar fortfarande caret och
+  räddas bara av sitt package-lock — en ren ominstallation där skulle gå i samma fälla.
 - **`.npmrc` med `legacy-peer-deps=true` krävs** för att `npm ci` ska gå igenom på EAS.
 - **`declare module "*.css";`** måste finnas i `nativewind-env.d.ts`, annars klagar `tsc` på
   `import "../global.css"`.
