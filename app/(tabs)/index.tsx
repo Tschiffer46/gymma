@@ -1,23 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
-import { FlatList, Pressable, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import {
   createGym,
   getCurrentSession,
+  getRoutine,
   listExercisesForGym,
   listGymsByRecentUse,
+  listRoutines,
   sessionSetCount,
   setActiveGym,
   startSession,
   useStore,
   type ExerciseListItem,
   type Gym,
+  type RoutineSummary,
   type Session,
 } from "@/lib/db";
 import { ExerciseRow } from "@/components/ExerciseRow";
-import { Button, Empty, Loading, SectionLabel } from "@/components/ui";
+import { Button, Chip, Empty, Loading, SectionLabel } from "@/components/ui";
 import { formatElapsed, relativeDay } from "@/lib/format";
 import { colors } from "@/lib/theme";
 
@@ -75,6 +78,7 @@ export default function GymmaScreen() {
 function StartSession({ onStarted }: { onStarted: () => void }) {
   const store = useStore();
   const [gyms, setGyms] = useState<GymWithUse[]>([]);
+  const [routines, setRoutines] = useState<RoutineSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [newGym, setNewGym] = useState("");
@@ -83,6 +87,7 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
   const load = useCallback(async () => {
     const list = await listGymsByRecentUse(store);
     setGyms(list);
+    setRoutines(await listRoutines(store));
     // Förvalt: gymmet du tränade på senast. Oftast rätt, alltid ett tryck bort.
     setSelected((cur) => cur ?? list[0]?.id ?? null);
   }, [store]);
@@ -108,12 +113,12 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     }
   }
 
-  async function begin() {
+  async function begin(routineId: string | null) {
     if (!selected || busy) return;
     setBusy(true);
     try {
       await setActiveGym(store, selected);
-      await startSession(store, selected);
+      await startSession(store, selected, routineId);
       onStarted();
     } finally {
       setBusy(false);
@@ -122,7 +127,10 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
-      <View className="flex-1 px-5">
+      <ScrollView
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text className="pb-1 pt-2 text-3xl font-bold tracking-tight text-ink">Gymma</Text>
         <Text className="mb-7 text-[14px] text-muted">Starta ett pass för att börja logga.</Text>
 
@@ -178,26 +186,46 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
             </Pressable>
           )}
         </View>
-      </View>
 
-      <View className="gap-2 border-t border-line px-5 pb-1 pt-3">
+        {routines.length > 0 ? (
+          <View className="mt-8">
+            <SectionLabel>Följ en plan</SectionLabel>
+            <View className="mt-3 gap-2">
+              {routines.map((r) => (
+                <Pressable
+                  key={r.id}
+                  onPress={() => begin(r.id)}
+                  disabled={!selected || busy}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Starta passet med planen ${r.name}`}
+                  className="flex-row items-center gap-3 rounded-[15px] border border-line bg-card px-4 active:opacity-70"
+                  style={{ minHeight: 64, opacity: selected ? 1 : 0.4 }}
+                >
+                  <Feather name="clipboard" size={18} color={colors.accent} />
+                  <View className="flex-1">
+                    <Text className="text-[16px] font-semibold text-ink">{r.name}</Text>
+                    <Text className="mt-0.5 text-[12.5px] text-muted">
+                      {r.itemCount === 0
+                        ? "Inga övningar än"
+                        : `${r.itemCount} ${r.itemCount === 1 ? "övning" : "övningar"}`}
+                    </Text>
+                  </View>
+                  <Feather name="play" size={17} color={colors.muted} />
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </ScrollView>
+
+      <View className="border-t border-line px-5 pb-1 pt-3">
         <Button
           label="Kör på egen hand"
           icon="play"
-          onPress={begin}
+          onPress={() => begin(null)}
           disabled={!selected}
           loading={busy}
         />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: true }}
-          disabled
-          className="flex-row items-center justify-center gap-2 rounded-[12px] border border-line"
-          style={{ minHeight: 54, opacity: 0.4 }}
-        >
-          <Feather name="clipboard" size={17} color={colors.muted} />
-          <Text className="text-base font-semibold text-muted">Följ en plan — kommer snart</Text>
-        </Pressable>
       </View>
     </SafeAreaView>
   );
@@ -213,6 +241,9 @@ function ActiveSession({ session }: { session: Session }) {
 
   const [items, setItems] = useState<ExerciseListItem[]>([]);
   const [gymName, setGymName] = useState("");
+  const [routineName, setRoutineName] = useState<string | null>(null);
+  const [planIds, setPlanIds] = useState<string[]>([]);
+  const [showAll, setShowAll] = useState(false);
   const [sets, setSets] = useState(0);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(Date.now());
@@ -226,10 +257,21 @@ function ActiveSession({ session }: { session: Session }) {
   const load = useCallback(async () => {
     const gyms = await listGymsByRecentUse(store);
     setGymName(gyms.find((g) => g.id === session.gymId)?.name ?? "");
-    setItems(await listExercisesForGym(store, session.gymId, session.id));
+
+    let ids: string[] = [];
+    if (session.routineId) {
+      const r = await getRoutine(store, session.routineId);
+      setRoutineName(r?.name ?? null);
+      ids = r?.items.map((i) => i.exercise.id) ?? [];
+      setPlanIds(ids);
+    }
+
+    // Planens övningar skickas med så de syns även om maskinen inte står på
+    // just det här gymmet — annars ser planen ut att ha tappat rader.
+    setItems(await listExercisesForGym(store, session.gymId, session.id, ids));
     setSets(await sessionSetCount(store, session.id));
     setLoading(false);
-  }, [store, session.gymId, session.id]);
+  }, [store, session.gymId, session.id, session.routineId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -239,15 +281,26 @@ function ActiveSession({ session }: { session: Session }) {
 
   const done = items.filter((i) => i.doneToday).length;
 
+  // I planläget styr planens ordning; annars listans egen sortering
+  // (ej körda först, därefter senast använd).
+  const hasPlan = planIds.length > 0;
+  const byId = new Map(items.map((i) => [i.exercise.id, i]));
+  const visible =
+    hasPlan && !showAll
+      ? planIds.map((pid) => byId.get(pid)).filter((i): i is ExerciseListItem => !!i)
+      : items;
+  const planDone = planIds.filter((pid) => byId.get(pid)?.doneToday).length;
+
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
       <View className="flex-row items-center gap-3 border-b border-line px-4 pb-3 pt-1">
         <View className="flex-1">
           <Text className="text-[17px] font-bold text-ink" numberOfLines={1}>
-            {gymName}
+            {routineName ? `${gymName} · ${routineName}` : gymName}
           </Text>
           <Text className="mt-0.5 text-[13px] text-muted">
-            {formatElapsed(session.startedAt, tick)} · {sets} set · {done} övningar
+            {formatElapsed(session.startedAt, tick)} · {sets} set ·{" "}
+            {hasPlan ? `${planDone}/${planIds.length} i planen` : `${done} övningar`}
           </Text>
         </View>
         <Pressable
@@ -263,11 +316,20 @@ function ActiveSession({ session }: { session: Session }) {
         </Pressable>
       </View>
 
+      {/* Designprincip 4: planen är en genväg, aldrig en grind. Man ska alltid
+          kunna gå ur den och logga något som inte står med. */}
+      {hasPlan ? (
+        <View className="flex-row gap-2 px-4 pt-3">
+          <Chip label="Planen" active={!showAll} onPress={() => setShowAll(false)} />
+          <Chip label="Alla övningar" active={showAll} onPress={() => setShowAll(true)} />
+        </View>
+      ) : null}
+
       {loading ? (
         <Loading />
       ) : (
         <FlatList
-          data={items}
+          data={visible}
           keyExtractor={(i) => i.exercise.id}
           contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 }}
           renderItem={({ item }) => (

@@ -94,4 +94,36 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE session ADD COLUMN feeling TEXT;
   ALTER TABLE session ADD COLUMN notes TEXT;
   `,
+
+  // 3 — rutiner ("Planera").
+  //
+  // En rutin är en SPARAD ORDNING, inte ett schema. Designprincip 4 gäller
+  // fortfarande: du kan logga vad som helst utanför planen, och maskiner läggs
+  // till första gången de används. Därför finns ingen koppling från rutin till
+  // gym — samma "Överkropp" ska gå att köra var som helst.
+  //
+  // session.routine_id sparar vilken plan passet följde, så Följ upp senare kan
+  // svara på "hur ofta kör jag faktiskt Ben?".
+  `
+  CREATE TABLE routine (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    deleted_at  TEXT
+  );
+
+  CREATE TABLE routine_item (
+    id          TEXT PRIMARY KEY,
+    routine_id  TEXT NOT NULL REFERENCES routine(id),
+    exercise_id TEXT NOT NULL REFERENCES exercise(id),
+    position    INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    deleted_at  TEXT
+  );
+  CREATE INDEX idx_routine_item_routine ON routine_item(routine_id, position);
+
+  ALTER TABLE session ADD COLUMN routine_id TEXT REFERENCES routine(id);
+  `,
 ];

@@ -67,7 +67,33 @@ export type Session = Timestamps & {
   endedAt: string | null;
   feeling: Feeling | null;
   notes: string | null;
+  /** Vilken plan passet följde, om någon. */
+  routineId: string | null;
 };
+
+/**
+ * En sparad ordning av övningar — aldrig ett krav.
+ *
+ * Designprincip 4 säger att programmet ska växa fram. Rutinen är därför en
+ * genväg till det man brukar göra, inte ett schema som stänger ute annat: under
+ * ett pass går det alltid att växla till hela biblioteket och logga något som
+ * inte står i planen.
+ */
+export type Routine = Timestamps & {
+  id: string;
+  name: string;
+};
+
+/** Rutin med antal övningar — det listvyn behöver. */
+export type RoutineSummary = Routine & { itemCount: number };
+
+export type RoutineItem = {
+  id: string;
+  position: number;
+  exercise: Exercise;
+};
+
+export type RoutineDetail = Routine & { items: RoutineItem[] };
 
 /** Ett tidigare pass för en övning — underlaget till "senaste gångerna". */
 export type PastPerformance = {

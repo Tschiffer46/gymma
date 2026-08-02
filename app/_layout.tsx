@@ -44,6 +44,7 @@ function Gate() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="log/[exerciseId]" options={{ ...header, title: "" }} />
       <Stack.Screen name="session/end" options={{ ...header, title: "Avsluta pass" }} />
+      <Stack.Screen name="routine/[id]" options={{ ...header, title: "Plan" }} />
       {/* Vanlig push, inte modal: skärmen ersätter sig själv med loggvyn när
           övningen sparats (router.replace), och då blir en modal presentation
           bara i vägen. */}

@@ -300,6 +300,86 @@ async function main() {
   eq(byUse[0].id, gyms[0].id, "det senast tränade gymmet ligger överst");
   eq(byUse[1].lastUsedAt, null, "ett aldrig använt gym saknar tidsstämpel och hamnar sist");
 
+  console.log("Rutiner");
+  const routineId = await q.createRoutine(store, "  Överkropp  ");
+  const routines = await q.listRoutines(store);
+  eq(routines.length, 1, "rutinen skapas");
+  eq(routines[0].name, "Överkropp", "namnet trimmas");
+  eq(routines[0].itemCount, 0, "tom rutin har noll övningar");
+
+  const seededIds = (await q.listExercisesForGym(store, gyms[0].id, null))
+    .filter((i) => i.exercise.type === "freeweight")
+    .slice(0, 3)
+    .map((i) => i.exercise.id);
+
+  for (const id of seededIds) await q.addRoutineItem(store, routineId, id);
+  await q.addRoutineItem(store, routineId, seededIds[0]);
+  let detail = await q.getRoutine(store, routineId);
+  eq(detail.items.length, 3, "dubblett läggs inte till två gånger");
+  eq(detail.items.map((i) => i.position).join(","), "0,1,2", "positioner är täta och börjar på 0");
+  eq(detail.items[0].exercise.id, seededIds[0], "första övningen ligger först");
+
+  console.log("Omordning");
+  await q.moveRoutineItem(store, detail.items[0].id, "down");
+  detail = await q.getRoutine(store, routineId);
+  eq(detail.items[0].exercise.id, seededIds[1], "flytt nedåt byter plats med grannen");
+  eq(detail.items[1].exercise.id, seededIds[0], "den flyttade hamnar på plats två");
+  eq(detail.items.map((i) => i.position).join(","), "0,1,2", "positionerna förblir täta");
+
+  await q.moveRoutineItem(store, detail.items[0].id, "up");
+  detail = await q.getRoutine(store, routineId);
+  eq(detail.items[0].exercise.id, seededIds[1], "flytt uppåt från toppen gör ingenting");
+
+  await q.moveRoutineItem(store, detail.items[2].id, "down");
+  detail = await q.getRoutine(store, routineId);
+  eq(detail.items[2].exercise.id, seededIds[2], "flytt nedåt från botten gör ingenting");
+
+  console.log("Ta bort ur rutin");
+  await q.removeRoutineItem(store, detail.items[0].id);
+  detail = await q.getRoutine(store, routineId);
+  eq(detail.items.length, 2, "raden försvinner");
+  eq(detail.items.map((i) => i.position).join(","), "0,1", "positionerna packas ihop");
+
+  console.log("Maskin i plan som saknas på gymmet");
+  // exId är bröstpressen som bara står på gyms[0]. Läggs den i planen ska den
+  // synas även när man kör planen på gyms[1] — annars ser planen ut att ha
+  // tappat övningar.
+  await q.addRoutineItem(store, routineId, exId);
+  const planIds = (await q.getRoutine(store, routineId)).items.map((i) => i.exercise.id);
+  const atOtherGym = await q.listExercisesForGym(store, gyms[1].id, null, planIds);
+  ok(
+    atOtherGym.some((i) => i.exercise.id === exId),
+    "planens maskin syns även på ett gym där den inte står",
+  );
+  eq(
+    atOtherGym.find((i) => i.exercise.id === exId).machine,
+    null,
+    "men utan maskinkoppling, så viktsteg och progression inte blandas ihop",
+  );
+  ok(
+    !(await q.listExercisesForGym(store, gyms[1].id, null)).some((i) => i.exercise.id === exId),
+    "utan plan syns den fortfarande inte på fel gym",
+  );
+
+  console.log("Pass kopplat till plan");
+  const planned = await q.startSession(store, gyms[0].id, routineId);
+  eq(planned.routineId, routineId, "passet minns vilken plan det följde");
+  eq(
+    (await q.getCurrentSession(store, gyms[0].id)).routineId,
+    routineId,
+    "planen läses tillbaka från databasen",
+  );
+  await q.endSession(store, planned.id, { feeling: null, notes: null });
+
+  console.log("Radera rutin");
+  await q.deleteRoutine(store, routineId);
+  eq((await q.listRoutines(store)).length, 0, "rutinen försvinner ur listan");
+  eq(await q.getRoutine(store, routineId), null, "raderad rutin går inte att hämta");
+  const orphan = db
+    .prepare("SELECT COUNT(*) AS n FROM routine_item WHERE routine_id = ? AND deleted_at IS NULL")
+    .get(routineId);
+  eq(orphan.n, 0, "rutinens rader raderas med");
+
   console.log("");
   if (failures > 0) {
     console.error(`${failures} av ${checks} kontroller misslyckades`);

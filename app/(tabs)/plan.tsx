@@ -1,62 +1,123 @@
-import { ScrollView, Text, View } from "react-native";
+import { useCallback, useState } from "react";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { Card } from "@/components/ui";
+import { createRoutine, listRoutines, useStore, type RoutineSummary } from "@/lib/db";
+import { Button, Empty, Loading } from "@/components/ui";
 import { colors } from "@/lib/theme";
 
-const PLANNED: { icon: keyof typeof Feather.glyphMap; title: string; body: string }[] = [
-  {
-    icon: "edit-3",
-    title: "Namngivna pass",
-    body: 'Egna rutiner som "Överkropp" eller "Ben tisdag".',
-  },
-  {
-    icon: "move",
-    title: "Dra in övningar och ordna dem",
-    body: "Välj övningar ur biblioteket och sätt ordningen du faktiskt kör dem i.",
-  },
-  {
-    icon: "play",
-    title: "Följ planen i gymmet",
-    body: 'Starta ett pass med "Följ en plan" så ligger övningarna i rätt ordning direkt.',
-  },
-];
-
 /**
- * "Planera" — skal.
+ * "Planera" — sparade ordningar av övningar.
  *
- * En plan blir en **sparad ordning**, aldrig ett krav: designprincip 4 säger
- * att programmet ska växa fram. Du ska fortfarande kunna logga vad som helst
- * utanför planen, och maskiner läggs fortfarande till första gången de används.
- * Planen är en genväg, inte en grind.
+ * En plan är aldrig ett krav. Designprincip 4 säger att programmet ska växa
+ * fram, så planen är en genväg till det man brukar göra: under passet går det
+ * alltid att växla till hela biblioteket och logga något som inte står i den.
  */
 export default function PlanScreen() {
+  const store = useStore();
+  const router = useRouter();
+
+  const [routines, setRoutines] = useState<RoutineSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setRoutines(await listRoutines(store));
+    setLoading(false);
+  }, [store]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
+
+  async function create() {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      const id = await createRoutine(store, trimmed);
+      setName("");
+      setAdding(false);
+      router.push({ pathname: "/routine/[id]", params: { id } });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 28 }}>
+      <ScrollView
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text className="pb-1 pt-2 text-3xl font-bold tracking-tight text-ink">Planera</Text>
-        <Text className="mb-7 text-[14px] leading-5 text-muted">
-          Byggs härnäst. Tanken är att en plan ska vara en sparad ordning, inte ett schema du
-          måste följa.
+        <Text className="mb-6 text-[14px] leading-5 text-muted">
+          En plan är en sparad ordning, inte ett schema. Du kan alltid logga något som inte står
+          i den.
         </Text>
 
-        <View className="gap-2.5">
-          {PLANNED.map((p) => (
-            <Card key={p.title} className="flex-row gap-3.5 px-4 py-4">
-              <Feather name={p.icon} size={20} color={colors.muted} style={{ marginTop: 2 }} />
-              <View className="flex-1">
-                <Text className="text-[16px] font-semibold text-ink">{p.title}</Text>
-                <Text className="mt-1 text-[13.5px] leading-[19px] text-muted">{p.body}</Text>
-              </View>
-            </Card>
-          ))}
-        </View>
+        {loading ? (
+          <Loading />
+        ) : routines.length === 0 && !adding ? (
+          <Empty
+            icon="clipboard"
+            title="Inga planer än"
+            body="Skapa en plan för ett pass du brukar köra, till exempel Överkropp eller Ben."
+          />
+        ) : (
+          <View className="gap-2">
+            {routines.map((r) => (
+              <Pressable
+                key={r.id}
+                onPress={() => router.push({ pathname: "/routine/[id]", params: { id: r.id } })}
+                accessibilityRole="button"
+                className="flex-row items-center gap-3 rounded-[15px] border border-line bg-card px-4 active:opacity-70"
+                style={{ minHeight: 68 }}
+              >
+                <View className="flex-1">
+                  <Text className="text-[17px] font-semibold text-ink">{r.name}</Text>
+                  <Text className="mt-0.5 text-[13px] text-muted">
+                    {r.itemCount === 0
+                      ? "Inga övningar än"
+                      : `${r.itemCount} ${r.itemCount === 1 ? "övning" : "övningar"}`}
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={20} color={colors.muted} />
+              </Pressable>
+            ))}
+          </View>
+        )}
 
-        <Text className="mt-7 text-[13px] leading-[18px] text-muted">
-          Till dess: kör på egen hand. Listan sorterar ändå det du inte gjort idag överst, och
-          det du använde senast därefter.
-        </Text>
+        {adding ? (
+          <View className="mt-3 flex-row gap-2">
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              placeholder="t.ex. Överkropp"
+              placeholderTextColor={colors.muted}
+              autoFocus
+              onSubmitEditing={create}
+              returnKeyType="done"
+              className="flex-1 rounded-[15px] border border-line bg-card px-4 text-[17px] text-ink"
+              style={{ minHeight: 58 }}
+            />
+            <View style={{ width: 104, justifyContent: "center" }}>
+              <Button label="Skapa" variant="secondary" onPress={create} loading={busy} />
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
+
+      {!adding ? (
+        <View className="border-t border-line px-4 pb-2 pt-3">
+          <Button label="Ny plan" icon="plus" variant="secondary" onPress={() => setAdding(true)} />
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
