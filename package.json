@@ -1,0 +1,44 @@
+{
+  "name": "gymma",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "typecheck": "tsc --noEmit",
+    "test:db": "tsc lib/db/core.ts lib/db/queries.ts lib/db/migrations.ts lib/db/seed.ts lib/db/match.ts lib/db/types.ts --outDir .verify --rootDir . --module commonjs --target es2022 --moduleResolution node --skipLibCheck --ignoreConfig --ignoreDeprecations 6.0 && node scripts/verify-db.cjs"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "expo": "~56.0.0",
+    "expo-constants": "~56.0.18",
+    "expo-crypto": "~56.0.4",
+    "expo-dev-client": "~56.0.20",
+    "expo-font": "~56.0.7",
+    "expo-haptics": "~56.0.3",
+    "expo-keep-awake": "~56.0.3",
+    "expo-linking": "~56.0.14",
+    "expo-router": "~56.2.11",
+    "expo-splash-screen": "~56.0.10",
+    "expo-sqlite": "~56.0.5",
+    "expo-status-bar": "~56.0.4",
+    "expo-updates": "~56.0.18",
+    "nativewind": "^4.1.23",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-css-interop": "^0.1.22",
+    "react-native-gesture-handler": "~2.31.1",
+    "react-native-reanimated": "4.3.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-worklets": "0.8.3",
+    "tailwindcss": "^3.4.19"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@types/react": "~19.2.0",
+    "babel-preset-expo": "~56.0.0",
+    "typescript": "~6.0.0"
+  }
+}
