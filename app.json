@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Gymma",
+    "slug": "gymma",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "gymma",
+    "userInterfaceStyle": "dark",
+    "icon": "./assets/images/icon.png",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "nu.vadskavi.gymma",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#131316"
+      },
+      "package": "nu.vadskavi.gymma"
+    },
+    "plugins": [
+      "expo-router",
+      "./plugins/withPrivacyManifest",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#131316"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      }
+    },
+    "owner": "tschiffer46"
+  }
+}

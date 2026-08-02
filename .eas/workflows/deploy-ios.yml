@@ -1,0 +1,67 @@
+# EAS Workflow — automatisk deploy vid merge till main, UTAN terminal.
+#
+# Logik (fingerprint-baserad): vid varje merge avgör EAS själv om ändringen är
+# native eller ren JS, och gör rätt sak automatiskt:
+#   - Finns redan ett bygge med samma native-fingerprint (= ren JS/asset-ändring)
+#       → publicera en OTA-uppdatering (eas update). Sekunder, inget bygge,
+#         ingen byggkvot förbrukas.
+#   - Annars (native-modul/capability/ikon/app.json-native ändrad = nytt fingerprint)
+#       → bygg nytt + submitta till TestFlight automatiskt.
+#
+# Runtime-policy "fingerprint" (app.json) gör att en OTA bara når byggen med
+# matchande native-kod ⇒ aldrig en JS-uppdatering som kräver en native-modul
+# binären saknar.
+#
+# ENGÅNGS-SETUP (se CLAUDE.md → "Bygg & deploy"):
+#   1. eas init            — skapar projektet, skriver projectId i app.json
+#   2. eas build/submit    — första gången interaktivt, så EAS får skapa credentials
+#   3. npx eas-cli channel:edit production --branch production
+#   4. expo.dev → projektet → GitHub → koppla repot
+
+name: "Deploy iOS (auto: bygg vid native-ändring, annars OTA)"
+
+on:
+  push:
+    branches: ['main']
+
+jobs:
+  fingerprint:
+    name: Beräkna native-fingerprint
+    type: fingerprint
+
+  get_ios_build:
+    name: Finns redan ett bygge för detta fingerprint?
+    needs: [fingerprint]
+    type: get-build
+    params:
+      fingerprint_hash: ${{ needs.fingerprint.outputs.ios_fingerprint_hash }}
+      profile: production
+
+  build_ios:
+    name: Bygg iOS (native-ändring)
+    needs: [get_ios_build]
+    # Bygg bara om INGET bygge med detta fingerprint redan finns.
+    if: ${{ !needs.get_ios_build.outputs.build_id }}
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  submit_ios:
+    name: Skicka till TestFlight
+    needs: [build_ios]
+    type: submit
+    params:
+      platform: ios
+      profile: production
+      build_id: ${{ needs.build_ios.outputs.build_id }}
+
+  publish_update:
+    name: Publicera OTA-uppdatering (ren JS-ändring)
+    needs: [get_ios_build]
+    # OTA bara om ett matchande bygge redan finns (native oförändrat).
+    if: ${{ needs.get_ios_build.outputs.build_id }}
+    type: update
+    params:
+      branch: production
+      message: "Auto-OTA vid merge till main"
