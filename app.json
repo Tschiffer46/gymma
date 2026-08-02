@@ -44,6 +44,9 @@
     "extra": {
       "router": {
         "origin": false
+      },
+      "eas": {
+        "projectId": "7531d681-3148-493d-ae86-2718c7eb810f"
       }
     },
     "owner": "tschiffer46"
