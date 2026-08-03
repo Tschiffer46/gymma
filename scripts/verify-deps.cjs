@@ -57,16 +57,29 @@ function copies(name, dir = path.join(ROOT, "node_modules"), found = []) {
   return found;
 }
 
-/** Minimal ^-range-kontroll. RN använder bara caret i sin peer-range. */
-function satisfiesCaret(v, range) {
+/**
+ * Minimal semver-kontroll för `^`, `~` och exakta versioner — det är allt
+ * react-native och Expos bundledNativeModules använder.
+ *
+ *   ^1.2.3  →  >=1.2.3 <2.0.0
+ *   ~1.2.3  →  >=1.2.3 <1.3.0
+ */
+function satisfies(v, range) {
   if (!v || !range) return false;
   const clean = range.replace(/^[\^~]/, "");
-  if (!range.startsWith("^")) return v === clean;
   const [a, b, c] = clean.split(".").map(Number);
   const [x, y, z] = v.split(".").map(Number);
-  if (x !== a) return false;
-  if (y !== b) return y > b;
-  return z >= c;
+  if ([a, b, c, x, y, z].some(Number.isNaN)) return v === clean;
+
+  if (range.startsWith("^")) {
+    if (x !== a) return false;
+    if (y !== b) return y > b;
+    return z >= c;
+  }
+  if (range.startsWith("~")) {
+    return x === a && y === b && z >= c;
+  }
+  return v === clean;
 }
 
 console.log("Beroendekontroller");
@@ -94,12 +107,32 @@ for (const dep of ["nativewind", "react-native-css-interop"]) {
   }
 }
 
-// 3. react måste matcha react-natives renderer, annars kraschar appen tyst i
+// 3. Native-moduler måste matcha den version Expo faktiskt testat SDK:n mot.
+//    En native-modul med fel version länkar ändå, men går sönder vid körning —
+//    samma tystnad som NativeWind-haveriet, och `expo install` (som annars
+//    väljer rätt version) är blockerad i Claude-web-sessioner.
+const bundled = require(path.join(ROOT, "node_modules", "expo", "bundledNativeModules.json"));
+const mismatched = [];
+for (const dep of Object.keys(pkg.dependencies)) {
+  const expected = bundled[dep];
+  if (!expected) continue;
+  const installed = version(dep);
+  if (installed && !satisfies(installed, expected)) {
+    mismatched.push(`${dep}: ${installed} installerad, Expo SDK vill ha ${expected}`);
+  }
+}
+if (mismatched.length === 0) {
+  pass("native-moduler matchar Expo SDK:ns förväntade versioner");
+} else {
+  fail(`fel version på native-modul:\n${mismatched.map((m) => `      ${m}`).join("\n")}`);
+}
+
+// 4. react måste matcha react-natives renderer, annars kraschar appen tyst i
 //    produktion — felet syns bara i dev client.
 const rnPeer = require(path.join(ROOT, "node_modules", "react-native", "package.json"))
   .peerDependencies.react;
 const reactVersion = version("react");
-if (satisfiesCaret(reactVersion, rnPeer)) {
+if (satisfies(reactVersion, rnPeer)) {
   pass(`react ${reactVersion} matchar react-natives krav ${rnPeer}`);
 } else {
   fail(`react ${reactVersion} matchar INTE react-natives krav ${rnPeer}`);

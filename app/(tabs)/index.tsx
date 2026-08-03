@@ -1,33 +1,44 @@
 import { useCallback, useEffect, useState } from "react";
-import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import {
+  averageSessionMinutes,
   createGym,
   getCurrentSession,
+  getExercise,
   getRoutine,
+  lastUsedRoutine,
   listExercisesForGym,
   listGymsByRecentUse,
   listRoutines,
   matchesQuery,
+  recentPbs,
   sessionSetCount,
   setActiveGym,
   skipExercise,
   skippedInSession,
   startSession,
   unskipExercise,
+  usualWeekdays,
   useStore,
+  weeklyTarget,
+  weekSummary,
   type ExerciseListItem,
   type Gym,
   type RoutineSummary,
   type Session,
 } from "@/lib/db";
 import { ExerciseRow } from "@/components/ExerciseRow";
-import { Button, Chip, Empty, Loading, SearchField, SectionLabel } from "@/components/ui";
-import { formatElapsed, relativeDay } from "@/lib/format";
-import { colors } from "@/lib/theme";
+import { FillBar } from "@/components/FillBar";
+import { StartSheet } from "@/components/StartSheet";
+import { WeekRing } from "@/components/WeekRing";
+import { Button, Chip, Empty, Loading, SearchField } from "@/components/ui";
+import { addDaysIso, startOfWeekIso, weekdayName } from "@/lib/dates";
+import { fmtVolume, fmtWeight, formatElapsed, numberWord } from "@/lib/format";
+import { colors, radius, tint } from "@/lib/theme";
 
 type GymWithUse = Gym & { lastUsedAt: string | null };
 
@@ -82,12 +93,19 @@ export default function GymmaScreen() {
 
 function StartSession({ onStarted }: { onStarted: () => void }) {
   const store = useStore();
+
   const [gyms, setGyms] = useState<GymWithUse[]>([]);
   const [routines, setRoutines] = useState<RoutineSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [newGym, setNewGym] = useState("");
+  const [week, setWeek] = useState({ sessions: 0, volumeKg: 0, prevVolumeKg: 0 });
+  const [target, setTarget] = useState(2);
+  const [usual, setUsual] = useState<number[]>([]);
+  const [pb, setPb] = useState<{ name: string; weightKg: number; deltaKg: number } | null>(null);
+  const [suggested, setSuggested] = useState<RoutineSummary | null>(null);
+  const [suggestedMinutes, setSuggestedMinutes] = useState<number | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [focusKey, setFocusKey] = useState(0);
 
   const load = useCallback(async () => {
     const list = await listGymsByRecentUse(store);
@@ -95,6 +113,30 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     setRoutines(await listRoutines(store));
     // Förvalt: gymmet du tränade på senast. Oftast rätt, alltid ett tryck bort.
     setSelected((cur) => cur ?? list[0]?.id ?? null);
+
+    const nowIso = new Date().toISOString();
+    const weekStart = startOfWeekIso();
+    setWeek(await weekSummary(store, weekStart));
+    setTarget(await weeklyTarget(store, weekStart));
+    setUsual(await usualWeekdays(store, nowIso));
+
+    // PB-raden visas bara för de senaste sju dagarna — ett rekord från i mars
+    // är historia, inte nyhet.
+    const pbs = await recentPbs(store, addDaysIso(nowIso, -7));
+    const top = pbs[0];
+    if (top) {
+      const ex = await getExercise(store, top.exerciseId);
+      setPb(ex ? { name: ex.name, weightKg: top.weightKg, deltaKg: top.deltaKg } : null);
+    } else {
+      setPb(null);
+    }
+
+    const last = await lastUsedRoutine(store);
+    setSuggested(last);
+    setSuggestedMinutes(last ? await averageSessionMinutes(store, last.id) : null);
+
+    // Nytt värde ⇒ fyllnadsstaven spelas om varje gång vyn får fokus.
+    setFocusKey((k) => k + 1);
   }, [store]);
 
   useFocusEffect(
@@ -103,25 +145,17 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     }, [load]),
   );
 
-  async function addGym() {
-    const name = newGym.trim();
-    if (!name || busy) return;
-    setBusy(true);
-    try {
-      const id = await createGym(store, name);
-      setNewGym("");
-      setAdding(false);
-      await load();
-      setSelected(id);
-    } finally {
-      setBusy(false);
-    }
+  async function addGym(name: string) {
+    const id = await createGym(store, name);
+    await load();
+    setSelected(id);
   }
 
   async function begin(routineId: string | null) {
     if (!selected || busy) return;
     setBusy(true);
     try {
+      setSheetOpen(false);
       await setActiveGym(store, selected);
       await startSession(store, selected, routineId);
       onStarted();
@@ -130,111 +164,181 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     }
   }
 
+  const gymName = gyms.find((g) => g.id === selected)?.name ?? "";
+  const remaining = Math.max(0, target - week.sessions);
+  const headline =
+    remaining === 0
+      ? "Målet är nått\nden här veckan"
+      : `${numberWord(remaining)} pass kvar\nden här veckan`;
+
+  const usualLine =
+    usual.length === 2
+      ? `${weekdayName(usual[0])} och ${weekdayName(usual[1]).toLowerCase()} är dina vanliga dagar.`
+      : null;
+
+  const hasPrev = week.prevVolumeKg > 0;
+  const volumeShare = hasPrev ? week.volumeKg / week.prevVolumeKg : week.volumeKg > 0 ? 1 : 0;
+  const volumeNote = hasPrev
+    ? `${Math.round(volumeShare * 100)} % av förra veckans ${fmtVolume(week.prevVolumeKg)}`
+    : "Ingen tidigare vecka att jämföra med än";
+
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
-      <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text className="pb-1 pt-2 text-3xl font-bold tracking-tight text-ink">Gymma</Text>
-        <Text className="mb-7 text-[14px] text-muted">Starta ett pass för att börja logga.</Text>
-
-        <SectionLabel>Var tränar du?</SectionLabel>
-        <View className="mt-3 gap-2">
-          {gyms.map((g) => (
-            <Pressable
-              key={g.id}
-              onPress={() => setSelected(g.id)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: selected === g.id }}
-              className={`flex-row items-center justify-between rounded-[15px] border px-4 active:opacity-70 ${
-                selected === g.id ? "border-accent bg-accent-soft" : "border-line bg-card"
-              }`}
-              style={{ minHeight: 62 }}
-            >
-              <View className="flex-1">
-                <Text className="text-[17px] font-semibold text-ink">{g.name}</Text>
-                <Text className="mt-0.5 text-[12.5px] text-muted">
-                  {g.lastUsedAt ? `Senast ${relativeDay(g.lastUsedAt)}` : "Aldrig tränat här"}
-                </Text>
-              </View>
-              {selected === g.id ? <Feather name="check" size={20} color={colors.accent} /> : null}
-            </Pressable>
-          ))}
-
-          {adding ? (
-            <View className="flex-row gap-2">
-              <TextInput
-                value={newGym}
-                onChangeText={setNewGym}
-                placeholder="Namn på gymmet"
-                placeholderTextColor={colors.muted}
-                autoFocus
-                onSubmitEditing={addGym}
-                returnKeyType="done"
-                className="flex-1 rounded-[15px] border border-line bg-card px-4 text-[17px] text-ink"
-                style={{ minHeight: 62 }}
-              />
-              <View style={{ width: 104, justifyContent: "center" }}>
-                <Button label="Spara" variant="secondary" onPress={addGym} loading={busy} />
-              </View>
-            </View>
-          ) : (
-            <Pressable
-              onPress={() => setAdding(true)}
-              accessibilityRole="button"
-              className="flex-row items-center gap-2 rounded-[15px] border border-dashed border-line px-4 active:opacity-60"
-              style={{ minHeight: 54 }}
-            >
-              <Feather name="plus" size={17} color={colors.muted} />
-              <Text className="text-[15px] text-muted">Nytt gym</Text>
-            </Pressable>
-          )}
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 16 }}>
+        <View className="flex-row items-center justify-between" style={{ paddingTop: 6 }}>
+          <Text
+            style={{
+              fontSize: 13,
+              fontWeight: "700",
+              letterSpacing: 2.34,
+              color: colors.accent,
+              textTransform: "uppercase",
+            }}
+          >
+            Gymma
+          </Text>
+          <Text style={{ fontSize: 13, color: colors.muted }} numberOfLines={1}>
+            {gymName}
+          </Text>
         </View>
 
-        {routines.length > 0 ? (
-          <View className="mt-8">
-            <SectionLabel>Följ en plan</SectionLabel>
-            <View className="mt-3 gap-2">
-              {routines.map((r) => (
-                <Pressable
-                  key={r.id}
-                  onPress={() => begin(r.id)}
-                  disabled={!selected || busy}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Starta passet med planen ${r.name}`}
-                  className="flex-row items-center gap-3 rounded-[15px] border border-line bg-card px-4 active:opacity-70"
-                  style={{ minHeight: 64, opacity: selected ? 1 : 0.4 }}
-                >
-                  <Feather name="clipboard" size={18} color={colors.accent} />
-                  <View className="flex-1">
-                    <Text className="text-[16px] font-semibold text-ink">{r.name}</Text>
-                    <Text className="mt-0.5 text-[12.5px] text-muted">
-                      {r.itemCount === 0
-                        ? "Inga övningar än"
-                        : `${r.itemCount} ${r.itemCount === 1 ? "övning" : "övningar"}`}
-                    </Text>
-                  </View>
-                  <Feather name="play" size={17} color={colors.muted} />
-                </Pressable>
-              ))}
+        <View className="flex-row items-center" style={{ marginTop: 30, gap: 22 }}>
+          <WeekRing done={week.sessions} target={target} />
+          <View className="flex-1">
+            <Text style={{ fontSize: 24, fontWeight: "700", letterSpacing: -0.6, color: colors.ink }}>
+              {headline}
+            </Text>
+            {usualLine ? (
+              <Text style={{ fontSize: 14, color: colors.muted, marginTop: 8, lineHeight: 20 }}>
+                {usualLine}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        <View style={{ marginTop: 34 }}>
+          <View className="flex-row items-center justify-between" style={{ marginBottom: 10 }}>
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: "600",
+                letterSpacing: 1.76,
+                color: colors.muted,
+                textTransform: "uppercase",
+              }}
+            >
+              Volym den här veckan
+            </Text>
+            <Text
+              style={{
+                fontSize: 15,
+                fontWeight: "600",
+                color: colors.ink,
+                fontVariant: ["tabular-nums"],
+              }}
+            >
+              {fmtVolume(week.volumeKg)}
+            </Text>
+          </View>
+          <FillBar share={volumeShare} replayKey={focusKey} />
+          <Text style={{ fontSize: 12.5, color: colors.mutedDim, marginTop: 8 }}>{volumeNote}</Text>
+        </View>
+
+        {pb ? (
+          <View
+            className="flex-row items-center"
+            style={{
+              marginTop: 20,
+              paddingTop: 18,
+              borderTopWidth: 1,
+              borderTopColor: colors.cardHi,
+              gap: 12,
+            }}
+          >
+            <View
+              className="items-center justify-center"
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: radius.pill,
+                backgroundColor: tint.ok,
+              }}
+            >
+              <Feather name="trending-up" size={19} color={colors.ok} />
+            </View>
+            <View className="flex-1">
+              <Text style={{ fontSize: 15.5, fontWeight: "600", color: colors.ink }}>
+                {pb.name} {fmtWeight(pb.weightKg)} kg
+              </Text>
+              <Text style={{ fontSize: 13, color: colors.muted, marginTop: 2 }}>
+                {pb.deltaKg > 0
+                  ? `Nytt bästa på den maskinen · +${fmtWeight(pb.deltaKg)} kg`
+                  : "Första gången på den maskinen"}
+              </Text>
             </View>
           </View>
         ) : null}
       </ScrollView>
 
-      <View className="border-t border-line px-5 pb-1 pt-3">
-        <Button
-          label="Kör på egen hand"
-          icon="play"
-          onPress={() => begin(null)}
-          disabled={!selected}
-          loading={busy}
-        />
+      <View style={{ paddingHorizontal: 22, paddingBottom: 4, gap: 10 }}>
+        <Pressable
+          onPress={() => begin(suggested?.id ?? null)}
+          disabled={!selected || busy}
+          accessibilityRole="button"
+          accessibilityLabel={suggested ? `Starta ${suggested.name}` : "Starta pass"}
+          className="flex-row items-center bg-accent active:opacity-80"
+          style={{
+            height: 64,
+            borderRadius: radius.lg,
+            paddingHorizontal: 20,
+            gap: 14,
+            opacity: selected ? 1 : 0.4,
+          }}
+        >
+          <Feather name="play" size={19} color={colors.white} />
+          <View className="flex-1">
+            <Text style={{ fontSize: 17, fontWeight: "600", color: colors.white }}>
+              {suggested ? `Starta ${suggested.name}` : "Starta pass"}
+            </Text>
+            <Text style={{ fontSize: 12.5, color: "rgba(255,255,255,0.72)", marginTop: 3 }}>
+              {suggested
+                ? [
+                    `${suggested.itemCount} ${suggested.itemCount === 1 ? "övning" : "övningar"}`,
+                    suggestedMinutes ? `ca ${suggestedMinutes} min` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "Kör på egen hand"}
+            </Text>
+          </View>
+        </Pressable>
+
+        <Pressable
+          onPress={() => setSheetOpen(true)}
+          accessibilityRole="button"
+          className="items-center justify-center active:opacity-60"
+          style={{ minHeight: 44 }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: "600", color: colors.muted }}>
+            {suggested ? "Byt plan · Kör på egen hand" : "Välj gym eller plan"}
+          </Text>
+        </Pressable>
       </View>
+
+      <StartSheet
+        open={sheetOpen}
+        gyms={gyms}
+        routines={routines}
+        selectedGymId={selected}
+        onSelectGym={setSelected}
+        onAddGym={addGym}
+        onStart={begin}
+        onClose={() => setSheetOpen(false)}
+      />
     </SafeAreaView>
   );
 }
+
 
 // ---------------------------------------------------------------------------
 // Med pågående pass

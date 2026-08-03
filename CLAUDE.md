@@ -25,6 +25,7 @@ Vid konflikt vinner principen. De kommer från kravspecen och är hela poängen 
 - **NativeWind 4** + Tailwind 3 — mörka tokens i `lib/theme.ts` och `tailwind.config.js`
 - **expo-sqlite** + egen migrationskörare. **Ingen ORM** (se "Varför inte Drizzle" nedan)
 - **expo-crypto** (UUID), **expo-haptics** (kvitto på loggat set), **@expo/vector-icons** (Feather)
+- **react-native-svg** (veckoringen; behövs även för graferna i Följ upp) + **Reanimated 4**
 - **EAS Build/Submit/Update** → TestFlight, automatiserat via `.eas/workflows/deploy-ios.yml`
 
 ## Filstruktur
@@ -43,10 +44,12 @@ app/
 ├── library.tsx            Övningsbibliotek med sök (nås från Inställningar)
 ├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 └── exercise/[id].tsx      Redigera övning: namn, engelskt namn, viktenhet, steg
-components/  ui.tsx (Card/Button/Chip/Stepper/Empty/Loading) · ExerciseRow.tsx
+components/  ui.tsx (Card/Button/Chip/Empty/Loading/SearchField) · ExerciseRow.tsx
+             · WeekRing.tsx (SVG) · FillBar.tsx · StartSheet.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
-├── format.ts   svenska tal ("2,5 kg"), "50 kg × 10, 10, 9", relativa datum
+├── format.ts   svenska tal ("2,5 kg"), volym i ton, "50 kg × 10, 10, 9", relativa datum
+├── dates.ts    veckostart (måndag), veckodagsnamn
 ├── muscles.ts  muskelnycklar → svenska visningsnamn
 ├── release.ts  RELEASE — byggmarkören, BUMPA PER RELEASE
 └── db/
@@ -313,10 +316,12 @@ telefonen. Testa den så här:
 - **Polering 1** ✅ Loggvyn omritad enligt `docs/design/gymma-polering-spec.md` (riktning 1d):
   vikten 96 px och tabulär, setpips, cyklande viktstegsetikett i stället för tre chip,
   PB-chip via `bestWeightOnMachine`, samt mikro-feedback (pop, pip-fyllning, toast).
-- **Polering 2–5** — startvyn (1b), pågående pass som bana (1c), celebration när planen är
-  klar, samt nivå & märken (1f). Specen ligger i `docs/design/`. **Obs:** 1f går emot
-  "Bygg inte detta → sociala funktioner/streaks" nedan; Thomas har ändrat det beslutet
-  medvetet, och listan ska uppdateras i samma PR som 1f byggs.
+- **Polering 2** ✅ Startvyn omritad enligt riktning 1b: veckoring (SVG), härlett veckomål,
+  volym mot förra veckan med animerad stav, PB-rad, och "Starta {plan}" med gymval + rutiner
+  flyttade till ett bottenark. Nya aggregat: `weekSummary`, `weeklyTarget`, `usualWeekdays`,
+  `recentPbs`, `sessionVolumeKg`, `lastUsedRoutine`, `averageSessionMinutes`.
+- **Polering 3–5** — pågående pass som bana (1c), celebration när planen är klar, samt
+  nivå & märken (1f). Specen ligger i `docs/design/`.
 - **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
@@ -331,9 +336,22 @@ telefonen. Testa den så här:
 
 ## Bygg inte detta
 Medvetet bortvalt, skyddar mot scope creep: vilotimer, kroppsvikt/mått/kroppssammansättning
-(hör hemma i Stegvis — håll gränsen skarp), sociala funktioner/delning/streaks, kondition och
+(hör hemma i Stegvis — håll gränsen skarp), **delning och jämförelse med andra**, kondition och
 kroppsviktsövningar, inloggning/konto/molnsync, övningsinstruktioner och videor (QR-koden på
 maskinen leder redan dit), automatisk viktrekommendation.
+
+### Ändrat beslut 2026-08-03: gamification är INTE längre bortvalt
+Kravspecen listade "sociala funktioner/delning/streaks" som en punkt. **Thomas har delat den
+punkten:** progression mot sig själv — veckoring, volymjämförelse, PB-chip, nivå och märken —
+är nu uttryckligen önskat och beskrivs i `docs/design/gymma-polering-spec.md`.
+
+Det som fortfarande är bortvalt är **det sociala**: att dela pass, se andras data eller jämföra
+sig med någon annan. Varje familjemedlem har sin egen lokala loggbok, och det står fast.
+
+Riv alltså inte veckoringen, PB-chippet eller nivåvyn som scope creep — de är beställda.
+Ton B gäller för all sådan copy: inga utropstecken, ingen coach, och **positiv återkoppling får
+bara påstå saker som är sanna ur datan** (därför visas t.ex. "dina vanliga dagar" inte alls när
+underlaget är under fyra pass).
 
 ## Kommunikation
 Thomas föredrar svenska. Förklara steg-för-steg med "varför", inte bara "vad". Ge

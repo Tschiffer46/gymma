@@ -31,6 +31,22 @@ export function formatSets(
   return sets.map((s) => `${fmtWeight(s.weightKg)}×${s.reps}`).join(", ");
 }
 
+/**
+ * Volym i ton när den blivit stor nog att bli oläslig i kilo.
+ * 12 400 kg → "12,4 t". Under ett ton behålls kilo.
+ */
+export function fmtVolume(kg: number): string {
+  if (kg < 1000) return `${Math.round(kg)} kg`;
+  return `${fmtWeight(Math.round(kg / 100) / 10)} t`;
+}
+
+const NUMBER_WORDS = ["noll", "ett", "två", "tre", "fyra", "fem", "sex", "sju", "åtta", "nio", "tio"];
+
+/** "tre" i stället för "3" — läsbarare i löpande text. */
+export function numberWord(n: number): string {
+  return NUMBER_WORDS[n] ?? String(n);
+}
+
 /** Passets längd: "4 min", "47 min", "1 h 12 min". */
 export function formatElapsed(fromIso: string, nowMs: number = Date.now()): string {
   const minutes = Math.max(0, Math.floor((nowMs - Date.parse(fromIso)) / 60_000));

@@ -837,6 +837,200 @@ export async function deleteSet({ db, now }: Store, setId: string): Promise<void
 }
 
 // ---------------------------------------------------------------------------
+// Vecka och volym (startvyn)
+// ---------------------------------------------------------------------------
+
+/**
+ * Volymformeln, delad av alla aggregat.
+ *
+ * Hantlar loggas per hantel, så vikten dubblas — annars ser ett hantelpass ut
+ * som halva jobbet. Blandas konventionerna blir kurvan brus, och det är därför
+ * `weight_unit` finns.
+ */
+const VOLUME_SUM = `SUM(se.weight_kg * se.reps *
+  (CASE WHEN e.weight_unit = 'per_hand' THEN 2 ELSE 1 END))`;
+
+/**
+ * Veckans pass och volym, plus förra veckans volym att jämföra mot.
+ *
+ * Räknar bara **avslutade** pass: ett pass hör till veckan när det är klart.
+ * Volym aggregeras över alla gym — till skillnad från progression spelar
+ * viktskalor ingen roll för en summa.
+ */
+export async function weekSummary(
+  { db }: Store,
+  weekStartIso: string,
+): Promise<{ sessions: number; volumeKg: number; prevVolumeKg: number }> {
+  const weekEnd = new Date(Date.parse(weekStartIso) + 7 * 86_400_000).toISOString();
+  const prevStart = new Date(Date.parse(weekStartIso) - 7 * 86_400_000).toISOString();
+
+  const sessions = await db.getFirstAsync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM session
+     WHERE deleted_at IS NULL AND ended_at >= ? AND ended_at < ?`,
+    [weekStartIso, weekEnd],
+  );
+
+  const volume = async (from: string, to: string) => {
+    const row = await db.getFirstAsync<{ v: number | null }>(
+      `SELECT ${VOLUME_SUM} AS v
+       FROM set_entry se
+       JOIN exercise e ON e.id = se.exercise_id
+       JOIN session s ON s.id = se.session_id
+       WHERE se.deleted_at IS NULL AND s.deleted_at IS NULL
+         AND s.ended_at >= ? AND s.ended_at < ?`,
+      [from, to],
+    );
+    return row?.v ?? 0;
+  };
+
+  return {
+    sessions: sessions?.n ?? 0,
+    volumeKg: await volume(weekStartIso, weekEnd),
+    prevVolumeKg: await volume(prevStart, weekStartIso),
+  };
+}
+
+/** Volymen i ett enskilt pass — samma formel, filtrerad på passet. */
+export async function sessionVolumeKg({ db }: Store, sessionId: string): Promise<number> {
+  const row = await db.getFirstAsync<{ v: number | null }>(
+    `SELECT ${VOLUME_SUM} AS v
+     FROM set_entry se
+     JOIN exercise e ON e.id = se.exercise_id
+     WHERE se.deleted_at IS NULL AND se.session_id = ?`,
+    [sessionId],
+  );
+  return row?.v ?? 0;
+}
+
+/**
+ * Veckomålet, härlett i stället för inställt.
+ *
+ * Medianen av antal pass per vecka de senaste sex veckorna, golv 2 och tak 6.
+ * Att härleda det betyder att målet följer med när vanan ändras, och att
+ * användaren aldrig behöver ställa in något — hade det varit en inställning
+ * skulle den bli fel och sedan ligga kvar och skava.
+ */
+export async function weeklyTarget({ db }: Store, weekStartIso: string): Promise<number> {
+  const from = new Date(Date.parse(weekStartIso) - 6 * 7 * 86_400_000).toISOString();
+  const rows = await db.getAllAsync<{ ended_at: string }>(
+    `SELECT ended_at FROM session
+     WHERE deleted_at IS NULL AND ended_at IS NOT NULL AND ended_at >= ? AND ended_at < ?`,
+    [from, weekStartIso],
+  );
+
+  const buckets = new Array(6).fill(0);
+  for (const r of rows) {
+    const weeksAgo = Math.floor((Date.parse(weekStartIso) - Date.parse(r.ended_at)) / (7 * 86_400_000));
+    if (weeksAgo >= 0 && weeksAgo < 6) buckets[weeksAgo]++;
+  }
+
+  const sorted = [...buckets].sort((a, b) => a - b);
+  const median = (sorted[2] + sorted[3]) / 2;
+  return Math.min(6, Math.max(2, Math.round(median)));
+}
+
+/**
+ * De två vanligaste träningsdagarna de senaste åtta veckorna.
+ *
+ * Returnerar tom lista när underlaget är tunt (< 4 pass) — en "vanlig dag"
+ * härledd ur två pass är ett påstående datan inte bär, och ton B säger att
+ * återkopplingen bara får påstå sanna saker.
+ */
+export async function usualWeekdays({ db }: Store, nowIso: string): Promise<number[]> {
+  const from = new Date(Date.parse(nowIso) - 8 * 7 * 86_400_000).toISOString();
+  const rows = await db.getAllAsync<{ dow: number; n: number }>(
+    `SELECT CAST(strftime('%w', started_at) AS INTEGER) AS dow, COUNT(*) AS n
+     FROM session
+     WHERE deleted_at IS NULL AND ended_at IS NOT NULL AND started_at >= ?
+     GROUP BY dow ORDER BY n DESC, dow ASC`,
+    [from],
+  );
+
+  const total = rows.reduce((sum, r) => sum + r.n, 0);
+  if (total < 4) return [];
+  return rows.slice(0, 2).map((r) => r.dow);
+}
+
+/**
+ * Nya rekord den senaste tiden — driver PB-raden på startvyn.
+ *
+ * Ett set räknas som PB om det slår allt som loggats på **samma maskin** före
+ * perioden. Fria vikter jämförs inom övningen bland set utan maskin.
+ */
+export async function recentPbs(
+  { db }: Store,
+  sinceIso: string,
+): Promise<{ exerciseId: string; machineId: string | null; weightKg: number; deltaKg: number }[]> {
+  const candidates = await db.getAllAsync<{
+    exercise_id: string;
+    machine_id: string | null;
+    w: number;
+  }>(
+    `SELECT exercise_id, machine_id, MAX(weight_kg) AS w
+     FROM set_entry
+     WHERE deleted_at IS NULL AND logged_at >= ?
+     GROUP BY exercise_id, machine_id`,
+    [sinceIso],
+  );
+
+  const out: { exerciseId: string; machineId: string | null; weightKg: number; deltaKg: number }[] = [];
+  for (const c of candidates) {
+    const before = c.machine_id
+      ? await db.getFirstAsync<{ w: number | null }>(
+          `SELECT MAX(weight_kg) AS w FROM set_entry
+           WHERE machine_id = ? AND deleted_at IS NULL AND logged_at < ?`,
+          [c.machine_id, sinceIso],
+        )
+      : await db.getFirstAsync<{ w: number | null }>(
+          `SELECT MAX(weight_kg) AS w FROM set_entry
+           WHERE exercise_id = ? AND machine_id IS NULL AND deleted_at IS NULL AND logged_at < ?`,
+          [c.exercise_id, sinceIso],
+        );
+
+    const prior = before?.w ?? null;
+    if (prior === null || c.w > prior) {
+      out.push({
+        exerciseId: c.exercise_id,
+        machineId: c.machine_id,
+        weightKg: c.w,
+        deltaKg: prior === null ? 0 : Math.round((c.w - prior) * 100) / 100,
+      });
+    }
+  }
+  return out.sort((a, b) => b.deltaKg - a.deltaKg);
+}
+
+/** Senast körda rutinen — den som föreslås på startvyn. */
+export async function lastUsedRoutine({ db }: Store): Promise<RoutineSummary | null> {
+  const row = await db.getFirstAsync<RoutineRow & { n: number }>(
+    `SELECT r.*,
+            (SELECT COUNT(*) FROM routine_item i
+             WHERE i.routine_id = r.id AND i.deleted_at IS NULL) AS n
+     FROM session s
+     JOIN routine r ON r.id = s.routine_id
+     WHERE s.deleted_at IS NULL AND s.routine_id IS NOT NULL AND r.deleted_at IS NULL
+     ORDER BY s.started_at DESC LIMIT 1`,
+    [],
+  );
+  return row ? { ...toRoutine(row), itemCount: row.n } : null;
+}
+
+/** Snittlängd på avslutade pass med en viss plan. Null när underlaget saknas. */
+export async function averageSessionMinutes(
+  { db }: Store,
+  routineId: string,
+): Promise<number | null> {
+  const row = await db.getFirstAsync<{ m: number | null; n: number }>(
+    `SELECT AVG((julianday(ended_at) - julianday(started_at)) * 1440) AS m, COUNT(*) AS n
+     FROM session
+     WHERE routine_id = ? AND deleted_at IS NULL AND ended_at IS NOT NULL`,
+    [routineId],
+  );
+  if (!row || row.n === 0 || row.m === null) return null;
+  return Math.round(row.m);
+}
+
+// ---------------------------------------------------------------------------
 // Rutiner ("Planera")
 // ---------------------------------------------------------------------------
 
