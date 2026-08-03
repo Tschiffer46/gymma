@@ -151,4 +151,23 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_session_skip ON session_skip(session_id);
   `,
+
+  // 5 — inställningar som nyckel/värde.
+  //
+  // Första användaren är `training_days`: vilka veckodagar du tänker träna.
+  // Veckomålet härleddes tidigare ur historiken, men ett osynligt mål går inte
+  // att ifrågasätta — "två pass kvar" utan att kunna se varifrån tvåan kom är
+  // brus. Nu är målet något du satt själv.
+  //
+  // Generell tabell i stället för en kolumn per inställning: nästa inställning
+  // kostar då ingen migration alls.
+  `
+  CREATE TABLE app_setting (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    deleted_at  TEXT
+  );
+  `,
 ];

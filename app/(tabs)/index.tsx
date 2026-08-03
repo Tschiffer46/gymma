@@ -8,37 +8,33 @@ import {
   averageSessionMinutes,
   createGym,
   getCurrentSession,
-  getExercise,
   getRoutine,
+  getTrainingDays,
   lastUsedRoutine,
   listExercisesForGym,
   listGymsByRecentUse,
   listRoutines,
   matchesQuery,
-  recentPbs,
+  sessionsPerWeekday,
   sessionSetCount,
   setActiveGym,
   skipExercise,
   skippedInSession,
   startSession,
   unskipExercise,
-  usualWeekdays,
   useStore,
-  weeklyTarget,
-  weekSummary,
   type ExerciseListItem,
   type Gym,
   type RoutineSummary,
   type Session,
 } from "@/lib/db";
 import { ExerciseRow } from "@/components/ExerciseRow";
-import { FillBar } from "@/components/FillBar";
 import { StartSheet } from "@/components/StartSheet";
 import { WeekRing } from "@/components/WeekRing";
 import { Button, Chip, Empty, Loading, SearchField } from "@/components/ui";
-import { addDaysIso, startOfWeekIso, weekdayName } from "@/lib/dates";
-import { fmtVolume, fmtWeight, formatElapsed, numberWord } from "@/lib/format";
-import { colors, radius, tint } from "@/lib/theme";
+import { nextTrainingDay, startOfWeekIso, weekdayName } from "@/lib/dates";
+import { formatElapsed } from "@/lib/format";
+import { colors, radius } from "@/lib/theme";
 
 type GymWithUse = Gym & { lastUsedAt: string | null };
 
@@ -97,15 +93,12 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
   const [gyms, setGyms] = useState<GymWithUse[]>([]);
   const [routines, setRoutines] = useState<RoutineSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [week, setWeek] = useState({ sessions: 0, volumeKg: 0, prevVolumeKg: 0 });
-  const [target, setTarget] = useState(2);
-  const [usual, setUsual] = useState<number[]>([]);
-  const [pb, setPb] = useState<{ name: string; weightKg: number; deltaKg: number } | null>(null);
+  const [days, setDays] = useState<number[]>([]);
+  const [trainedThisWeek, setTrainedThisWeek] = useState<boolean[]>(new Array(7).fill(false));
   const [suggested, setSuggested] = useState<RoutineSummary | null>(null);
   const [suggestedMinutes, setSuggestedMinutes] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [focusKey, setFocusKey] = useState(0);
 
   const load = useCallback(async () => {
     const list = await listGymsByRecentUse(store);
@@ -114,29 +107,12 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     // Förvalt: gymmet du tränade på senast. Oftast rätt, alltid ett tryck bort.
     setSelected((cur) => cur ?? list[0]?.id ?? null);
 
-    const nowIso = new Date().toISOString();
-    const weekStart = startOfWeekIso();
-    setWeek(await weekSummary(store, weekStart));
-    setTarget(await weeklyTarget(store, weekStart));
-    setUsual(await usualWeekdays(store, nowIso));
-
-    // PB-raden visas bara för de senaste sju dagarna — ett rekord från i mars
-    // är historia, inte nyhet.
-    const pbs = await recentPbs(store, addDaysIso(nowIso, -7));
-    const top = pbs[0];
-    if (top) {
-      const ex = await getExercise(store, top.exerciseId);
-      setPb(ex ? { name: ex.name, weightKg: top.weightKg, deltaKg: top.deltaKg } : null);
-    } else {
-      setPb(null);
-    }
+    setDays(await getTrainingDays(store));
+    setTrainedThisWeek(await sessionsPerWeekday(store, startOfWeekIso()));
 
     const last = await lastUsedRoutine(store);
     setSuggested(last);
     setSuggestedMinutes(last ? await averageSessionMinutes(store, last.id) : null);
-
-    // Nytt värde ⇒ fyllnadsstaven spelas om varje gång vyn får fokus.
-    setFocusKey((k) => k + 1);
   }, [store]);
 
   useFocusEffect(
@@ -165,22 +141,32 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
   }
 
   const gymName = gyms.find((g) => g.id === selected)?.name ?? "";
-  const remaining = Math.max(0, target - week.sessions);
+
+  // Målet är antalet dagar DU valt, inte ett härlett tal. Det är hela poängen:
+  // ett osynligt mål går inte att ifrågasätta.
+  const doneThisWeek = days.filter((d) => trainedThisWeek[d]).length;
+  const next = nextTrainingDay(days);
+  const trainedToday = trainedThisWeek[new Date().getDay()];
+
   const headline =
-    remaining === 0
-      ? "Målet är nått\nden här veckan"
-      : `${numberWord(remaining)} pass kvar\nden här veckan`;
+    days.length === 0
+      ? "Välj dina\nträningsdagar"
+      : next === null
+        ? ""
+        : next.daysFromNow === 0
+          ? trainedToday
+            ? "Klart\nför idag"
+            : "Idag är en\nträningsdag"
+          : `Nästa pass\n${weekdayName(next.dow)}`;
 
-  const usualLine =
-    usual.length === 2
-      ? `${weekdayName(usual[0])} och ${weekdayName(usual[1]).toLowerCase()} är dina vanliga dagar.`
-      : null;
-
-  const hasPrev = week.prevVolumeKg > 0;
-  const volumeShare = hasPrev ? week.volumeKg / week.prevVolumeKg : week.volumeKg > 0 ? 1 : 0;
-  const volumeNote = hasPrev
-    ? `${Math.round(volumeShare * 100)} % av förra veckans ${fmtVolume(week.prevVolumeKg)}`
-    : "Ingen tidigare vecka att jämföra med än";
+  const sub =
+    days.length === 0
+      ? "Gå till Planera och välj vilka dagar du siktar på."
+      : `Du valde ${days
+          .slice()
+          .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+          .map((d) => weekdayName(d).slice(0, 3).toLowerCase())
+          .join(", ")}.`;
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
@@ -202,82 +188,17 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
           </Text>
         </View>
 
-        <View className="flex-row items-center" style={{ marginTop: 30, gap: 22 }}>
-          <WeekRing done={week.sessions} target={target} />
+        <View className="flex-row items-center" style={{ marginTop: 34, gap: 20 }}>
+          {days.length > 0 ? <WeekRing done={doneThisWeek} target={days.length} size={104} /> : null}
           <View className="flex-1">
             <Text style={{ fontSize: 24, fontWeight: "700", letterSpacing: -0.6, color: colors.ink }}>
               {headline}
             </Text>
-            {usualLine ? (
-              <Text style={{ fontSize: 14, color: colors.muted, marginTop: 8, lineHeight: 20 }}>
-                {usualLine}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-
-        <View style={{ marginTop: 34 }}>
-          <View className="flex-row items-center justify-between" style={{ marginBottom: 10 }}>
-            <Text
-              style={{
-                fontSize: 11,
-                fontWeight: "600",
-                letterSpacing: 1.76,
-                color: colors.muted,
-                textTransform: "uppercase",
-              }}
-            >
-              Volym den här veckan
-            </Text>
-            <Text
-              style={{
-                fontSize: 15,
-                fontWeight: "600",
-                color: colors.ink,
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {fmtVolume(week.volumeKg)}
+            <Text style={{ fontSize: 14, color: colors.muted, marginTop: 8, lineHeight: 20 }}>
+              {sub}
             </Text>
           </View>
-          <FillBar share={volumeShare} replayKey={focusKey} />
-          <Text style={{ fontSize: 12.5, color: colors.mutedDim, marginTop: 8 }}>{volumeNote}</Text>
         </View>
-
-        {pb ? (
-          <View
-            className="flex-row items-center"
-            style={{
-              marginTop: 20,
-              paddingTop: 18,
-              borderTopWidth: 1,
-              borderTopColor: colors.cardHi,
-              gap: 12,
-            }}
-          >
-            <View
-              className="items-center justify-center"
-              style={{
-                width: 38,
-                height: 38,
-                borderRadius: radius.pill,
-                backgroundColor: tint.ok,
-              }}
-            >
-              <Feather name="trending-up" size={19} color={colors.ok} />
-            </View>
-            <View className="flex-1">
-              <Text style={{ fontSize: 15.5, fontWeight: "600", color: colors.ink }}>
-                {pb.name} {fmtWeight(pb.weightKg)} kg
-              </Text>
-              <Text style={{ fontSize: 13, color: colors.muted, marginTop: 2 }}>
-                {pb.deltaKg > 0
-                  ? `Nytt bästa på den maskinen · +${fmtWeight(pb.deltaKg)} kg`
-                  : "Första gången på den maskinen"}
-              </Text>
-            </View>
-          </View>
-        ) : null}
       </ScrollView>
 
       <View style={{ paddingHorizontal: 22, paddingBottom: 4, gap: 10 }}>
