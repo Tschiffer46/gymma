@@ -555,6 +555,126 @@ async function main() {
   );
   await q.endSession(store, pbSession.id, { feeling: null, notes: null });
 
+  console.log("Vecka, volym och mål");
+  // Egen databas: veckoaggregaten är känsliga för allt som loggats ovan, och
+  // ett isolerat underlag gör förväntningarna exakta i stället för ungefärliga.
+  const wdb = new DatabaseSync(":memory:");
+  let wclock = Date.parse("2026-08-03T09:00:00.000Z"); // en måndag
+  const wstore = {
+    db: adapter(wdb),
+    uuid: randomUUID,
+    now: () => new Date(wclock).toISOString(),
+  };
+  await core.initStore(wstore);
+
+  const wgym = (await q.listGyms(wstore))[0].id;
+  const barbell = await q.findExerciseByName(wstore, "Bänkpress"); // total
+  const dumbbell = await q.findExerciseByName(wstore, "Sidolyft"); // per_hand
+  const weekStart = new Date(wclock).toISOString();
+
+  const blankWeek = await q.weekSummary(wstore, weekStart);
+  eq(blankWeek.sessions, 0, "tom vecka har noll pass");
+  eq(blankWeek.volumeKg, 0, "tom vecka har noll volym");
+
+  // Ett avslutat pass: 100 kg × 10 skivstång + 10 kg × 10 hantlar (räknas ×2).
+  const w1 = await q.startSession(wstore, wgym);
+  await q.logSet(wstore, {
+    sessionId: w1.id, exerciseId: barbell.id, machineId: null,
+    weightKg: 100, reps: 10, setIndex: 1,
+  });
+  await q.logSet(wstore, {
+    sessionId: w1.id, exerciseId: dumbbell.id, machineId: null,
+    weightKg: 10, reps: 10, setIndex: 1,
+  });
+  eq(await q.sessionVolumeKg(wstore, w1.id), 1200, "hantlar räknas dubbelt i volymen");
+
+  eq(
+    (await q.weekSummary(wstore, weekStart)).sessions,
+    0,
+    "ett PÅGÅENDE pass räknas inte — passet hör till veckan när det är klart",
+  );
+  wclock += 45 * 60_000;
+  await q.endSession(wstore, w1.id, { feeling: "lagom", notes: null });
+
+  const afterOne = await q.weekSummary(wstore, weekStart);
+  eq(afterOne.sessions, 1, "avslutat pass räknas");
+  eq(afterOne.volumeKg, 1200, "veckovolymen använder samma formel");
+  eq(afterOne.prevVolumeKg, 0, "förra veckan var tom");
+
+  console.log("Veckomål härlett ur vanan");
+  eq(await q.weeklyTarget(wstore, weekStart), 2, "utan historik blir målet golvet 2");
+
+  // Fyra pass i veckan, fyra veckor bakåt ⇒ medianen blir 4.
+  for (let week = 1; week <= 4; week++) {
+    for (let i = 0; i < 4; i++) {
+      wclock = Date.parse(weekStart) - week * 7 * 86_400_000 + i * 86_400_000;
+      const s = await q.startSession(wstore, wgym);
+      await q.logSet(wstore, {
+        sessionId: s.id, exerciseId: barbell.id, machineId: null,
+        weightKg: 80, reps: 10, setIndex: 1,
+      });
+      wclock += 40 * 60_000;
+      await q.endSession(wstore, s.id, { feeling: null, notes: null });
+    }
+  }
+  wclock = Date.parse(weekStart) + 9 * 3600_000;
+  eq(await q.weeklyTarget(wstore, weekStart), 4, "målet blir medianen av veckorna bakåt");
+  ok((await q.weekSummary(wstore, weekStart)).prevVolumeKg > 0, "förra veckans volym hittas nu");
+
+  console.log("Vanliga träningsdagar");
+  const usual = await q.usualWeekdays(wstore, new Date(wclock).toISOString());
+  eq(usual.length, 2, "två vanligaste dagarna returneras");
+  ok(usual.every((d) => d >= 0 && d <= 6), "veckodagarna ligger i intervallet 0–6");
+
+  const thin = new DatabaseSync(":memory:");
+  const tstore = { db: adapter(thin), uuid: randomUUID, now: () => new Date(wclock).toISOString() };
+  await core.initStore(tstore);
+  eq(
+    (await q.usualWeekdays(tstore, new Date(wclock).toISOString())).length,
+    0,
+    "tunt underlag ger inga 'vanliga dagar' — påstå inget datan inte bär",
+  );
+
+  console.log("Nya rekord");
+  const since = new Date(Date.parse(weekStart) - 86_400_000).toISOString();
+  const pbs = await q.recentPbs(wstore, since);
+  ok(
+    pbs.some((p) => p.exerciseId === barbell.id && p.weightKg === 100),
+    "100 kg slår tidigare 80 kg och räknas som rekord",
+  );
+  eq(
+    pbs.find((p) => p.exerciseId === barbell.id).deltaKg,
+    20,
+    "skillnaden mot förra rekordet räknas ut",
+  );
+  eq(
+    (await q.recentPbs(wstore, new Date(wclock + 86_400_000).toISOString())).length,
+    0,
+    "inga rekord i en period utan set",
+  );
+
+  console.log("Föreslagen plan");
+  eq(await q.lastUsedRoutine(wstore), null, "utan plan-pass finns inget förslag");
+  const wroutine = await q.createRoutine(wstore, "Överkropp");
+  await q.addRoutineItem(wstore, wroutine, barbell.id);
+  const planned2 = await q.startSession(wstore, wgym, wroutine);
+  await q.logSet(wstore, {
+    sessionId: planned2.id, exerciseId: barbell.id, machineId: null,
+    weightKg: 90, reps: 8, setIndex: 1,
+  });
+  wclock += 50 * 60_000;
+  await q.endSession(wstore, planned2.id, { feeling: null, notes: null });
+
+  const suggested = await q.lastUsedRoutine(wstore);
+  eq(suggested.name, "Överkropp", "senast körda planen föreslås");
+  eq(suggested.itemCount, 1, "antal övningar följer med");
+  eq(await q.averageSessionMinutes(wstore, wroutine), 50, "snittlängden räknas ur passen");
+  eq(
+    await q.averageSessionMinutes(wstore, "finns-inte"),
+    null,
+    "plan utan avslutade pass saknar snittlängd",
+  );
+
   console.log("");
   if (failures > 0) {
     console.error(`${failures} av ${checks} kontroller misslyckades`);

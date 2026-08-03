@@ -33,7 +33,7 @@ import {
 } from "@/lib/db";
 import { Loading } from "@/components/ui";
 import { fmtWeight, weightUnitLabel } from "@/lib/format";
-import { colors, radius, tint, TAP } from "@/lib/theme";
+import { colors, radius, tint } from "@/lib/theme";
 
 /** Viktmagasin går i olika steg. Tre val räcker och slipper tangentbordet. */
 const STEP_OPTIONS = [2.5, 5, 10];
