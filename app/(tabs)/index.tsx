@@ -10,12 +10,15 @@ import {
   getCurrentSession,
   getRoutine,
   listPlannedDays,
+  listTopGyms,
+  listTopRoutines,
   nextPlannedDay,
   lastUsedRoutine,
   listExercisesForGym,
   listGymsByRecentUse,
   listRoutines,
   matchesQuery,
+  plannedRoutineForDay,
   trainedDays,
   sessionSetCount,
   setActiveGym,
@@ -32,8 +35,15 @@ import {
 import { ExerciseRow } from "@/components/ExerciseRow";
 import { StartSheet } from "@/components/StartSheet";
 import { WeekRing } from "@/components/WeekRing";
-import { Button, Chip, Empty, Loading, SearchField } from "@/components/ui";
-import { addDaysIso, daysBetween, describeDay, startOfWeekIso, toDayKey } from "@/lib/dates";
+import { Button, Chip, Empty, Loading, SearchField, SectionLabel } from "@/components/ui";
+import {
+  addDaysIso,
+  daysBetween,
+  describeDay,
+  greeting,
+  startOfWeekIso,
+  toDayKey,
+} from "@/lib/dates";
 import { formatElapsed } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
 
@@ -93,12 +103,16 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
 
   const [gyms, setGyms] = useState<GymWithUse[]>([]);
   const [routines, setRoutines] = useState<RoutineSummary[]>([]);
+  const [topGyms, setTopGyms] = useState<Gym[]>([]);
+  const [topRoutines, setTopRoutines] = useState<RoutineSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // `undefined` = inte valt än (då styr planen/senast körda), `null` = på egen hand.
+  const [routineId, setRoutineId] = useState<string | null | undefined>(undefined);
+  const [todayPlan, setTodayPlan] = useState<RoutineSummary | null>(null);
   const [plannedThisWeek, setPlannedThisWeek] = useState<string[]>([]);
   const [trainedThisWeek, setTrainedThisWeek] = useState<string[]>([]);
   const [next, setNext] = useState<string | null>(null);
-  const [suggested, setSuggested] = useState<RoutineSummary | null>(null);
-  const [suggestedMinutes, setSuggestedMinutes] = useState<number | null>(null);
+  const [minutes, setMinutes] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -106,6 +120,8 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     const list = await listGymsByRecentUse(store);
     setGyms(list);
     setRoutines(await listRoutines(store));
+    setTopGyms(await listTopGyms(store, 3));
+    setTopRoutines(await listTopRoutines(store, 3));
     // Förvalt: gymmet du tränade på senast. Oftast rätt, alltid ett tryck bort.
     setSelected((cur) => cur ?? list[0]?.id ?? null);
 
@@ -117,9 +133,12 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     setTrainedThisWeek(await trainedDays(store, from, to));
     setNext(await nextPlannedDay(store, toDayKey()));
 
-    const last = await lastUsedRoutine(store);
-    setSuggested(last);
-    setSuggestedMinutes(last ? await averageSessionMinutes(store, last.id) : null);
+    // Dagens plan vinner över senast körda: har du bestämt vad idag ska vara
+    // är det svaret på "vad ska jag köra".
+    const forToday = await plannedRoutineForDay(store, toDayKey());
+    setTodayPlan(forToday);
+    const fallback = forToday ?? (await lastUsedRoutine(store));
+    setRoutineId((cur) => (cur === undefined ? (fallback?.id ?? null) : cur));
   }, [store]);
 
   useFocusEffect(
@@ -128,26 +147,41 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     }, [load]),
   );
 
+  const chosen = routineId ? (routines.find((r) => r.id === routineId) ?? null) : null;
+
+  // Snittlängden hör till den valda planen och måste hämtas om när valet byts.
+  useEffect(() => {
+    let alive = true;
+    if (!chosen) {
+      setMinutes(null);
+      return;
+    }
+    averageSessionMinutes(store, chosen.id).then((m) => {
+      if (alive) setMinutes(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [store, chosen?.id]);
+
   async function addGym(name: string) {
     const id = await createGym(store, name);
     await load();
     setSelected(id);
   }
 
-  async function begin(routineId: string | null) {
+  async function begin(id: string | null) {
     if (!selected || busy) return;
     setBusy(true);
     try {
       setSheetOpen(false);
       await setActiveGym(store, selected);
-      await startSession(store, selected, routineId);
+      await startSession(store, selected, id);
       onStarted();
     } finally {
       setBusy(false);
     }
   }
-
-  const gymName = gyms.find((g) => g.id === selected)?.name ?? "";
 
   // Målet är dagarna DU planerat i kalendern, inte ett härlett tal. Det är
   // hela poängen: ett osynligt mål går inte att ifrågasätta.
@@ -173,14 +207,25 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
       ? "Gå till Planera och välj dagar i kalendern."
       : daysUntilNext === 0
         ? trainedToday
-          ? "Bra jobbat. Nästa gång enligt din plan."
-          : "Enligt din plan i kalendern."
+          ? "Ett pass loggat idag. Nästa gång enligt din plan."
+          : todayPlan
+            ? `Enligt planen: ${todayPlan.name}.`
+            : "Enligt din plan i kalendern."
         : `${describeDay(next)} — om ${daysUntilNext} ${daysUntilNext === 1 ? "dag" : "dagar"}.`;
+
+  // Snabbstarten visar de vanligaste valen, men aldrig på bekostnad av det som
+  // faktiskt är valt: dagens plan och den aktuella markeringen läggs alltid
+  // till om de saknas. Resten når man via bottenarket.
+  const gymChips = withSelection(topGyms, gyms.find((g) => g.id === selected));
+  const routineChips = withSelection(
+    todayPlan ? withSelection(topRoutines, todayPlan) : topRoutines,
+    chosen,
+  );
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 16 }}>
-        <View className="flex-row items-center justify-between" style={{ paddingTop: 6 }}>
+        <View style={{ paddingTop: 6 }}>
           <Text
             style={{
               fontSize: 13,
@@ -192,32 +237,63 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
           >
             Gymma
           </Text>
-          <Text style={{ fontSize: 13, color: colors.muted }} numberOfLines={1}>
-            {gymName}
-          </Text>
+          <Text style={{ fontSize: 15, color: colors.muted, marginTop: 6 }}>{greeting()}</Text>
         </View>
 
-        <View className="flex-row items-center" style={{ marginTop: 34, gap: 20 }}>
+        <View className="flex-row items-center" style={{ marginTop: 24, gap: 18 }}>
           {targetThisWeek > 0 ? (
-            <WeekRing done={doneThisWeek} target={targetThisWeek} size={104} />
+            <WeekRing done={doneThisWeek} target={targetThisWeek} size={88} />
           ) : null}
           <View className="flex-1">
-            <Text style={{ fontSize: 24, fontWeight: "700", letterSpacing: -0.6, color: colors.ink }}>
+            <Text style={{ fontSize: 23, fontWeight: "700", letterSpacing: -0.6, color: colors.ink }}>
               {headline}
             </Text>
-            <Text style={{ fontSize: 14, color: colors.muted, marginTop: 8, lineHeight: 20 }}>
+            <Text style={{ fontSize: 14, color: colors.muted, marginTop: 7, lineHeight: 20 }}>
               {sub}
             </Text>
+          </View>
+        </View>
+
+        <View style={{ marginTop: 28 }}>
+          <SectionLabel>Var tränar du?</SectionLabel>
+          <View className="mt-3 flex-row flex-wrap gap-2">
+            {gymChips.map((g) => (
+              <Chip
+                key={g.id}
+                label={g.name}
+                active={selected === g.id}
+                onPress={() => setSelected(g.id)}
+              />
+            ))}
+          </View>
+        </View>
+
+        <View style={{ marginTop: 22 }}>
+          <SectionLabel>Vilket pass?</SectionLabel>
+          <View className="mt-3 flex-row flex-wrap gap-2">
+            {routineChips.map((r) => (
+              <Chip
+                key={r.id}
+                label={todayPlan?.id === r.id ? `${r.name} · idag` : r.name}
+                active={routineId === r.id}
+                onPress={() => setRoutineId(r.id)}
+              />
+            ))}
+            <Chip
+              label="På egen hand"
+              active={routineId === null}
+              onPress={() => setRoutineId(null)}
+            />
           </View>
         </View>
       </ScrollView>
 
       <View style={{ paddingHorizontal: 22, paddingBottom: 4, gap: 10 }}>
         <Pressable
-          onPress={() => begin(suggested?.id ?? null)}
+          onPress={() => begin(routineId ?? null)}
           disabled={!selected || busy}
           accessibilityRole="button"
-          accessibilityLabel={suggested ? `Starta ${suggested.name}` : "Starta pass"}
+          accessibilityLabel={chosen ? `Starta ${chosen.name}` : "Starta pass"}
           className="flex-row items-center bg-accent active:opacity-80"
           style={{
             height: 64,
@@ -230,17 +306,18 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
           <Feather name="play" size={19} color={colors.white} />
           <View className="flex-1">
             <Text style={{ fontSize: 17, fontWeight: "600", color: colors.white }}>
-              {suggested ? `Starta ${suggested.name}` : "Starta pass"}
+              {chosen ? `Starta ${chosen.name}` : "Starta pass"}
             </Text>
             <Text style={{ fontSize: 12.5, color: "rgba(255,255,255,0.72)", marginTop: 3 }}>
-              {suggested
-                ? [
-                    `${suggested.itemCount} ${suggested.itemCount === 1 ? "övning" : "övningar"}`,
-                    suggestedMinutes ? `ca ${suggestedMinutes} min` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : "Kör på egen hand"}
+              {[
+                gyms.find((g) => g.id === selected)?.name,
+                chosen
+                  ? `${chosen.itemCount} ${chosen.itemCount === 1 ? "övning" : "övningar"}`
+                  : "På egen hand",
+                chosen && minutes ? `ca ${minutes} min` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </Text>
           </View>
         </Pressable>
@@ -252,7 +329,7 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
           style={{ minHeight: 44 }}
         >
           <Text style={{ fontSize: 15, fontWeight: "600", color: colors.muted }}>
-            {suggested ? "Byt plan · Kör på egen hand" : "Välj gym eller plan"}
+            Fler gym och planer
           </Text>
         </Pressable>
       </View>
@@ -269,6 +346,16 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
       />
     </SafeAreaView>
   );
+}
+
+/**
+ * Lägger till det valda alternativet i snabbstartens lista om det inte redan
+ * finns där. Utan det skulle en markering kunna hamna utanför chipsen och se
+ * ut att ha försvunnit.
+ */
+function withSelection<T extends { id: string }>(top: T[], selected: T | null | undefined): T[] {
+  if (!selected || top.some((t) => t.id === selected.id)) return top;
+  return [selected, ...top];
 }
 
 

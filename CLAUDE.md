@@ -34,9 +34,9 @@ app/
 ├── _layout.tsx            DbProvider + laddningsgrind + Stack
 ├── (tabs)/
 │   ├── _layout.tsx        Gymma / Följ upp / Planera / Inställningar
-│   ├── index.tsx          GYMMA — startvy (var + hur) eller pågående pass
-│   ├── insights.tsx       Följ upp — skal tills det finns data
-│   ├── plan.tsx           Planera — kalender med träningsdagar + rutiner
+│   ├── index.tsx          GYMMA — hälsning + snabbstart (gym/pass) eller pågående pass
+│   ├── insights.tsx       Följ upp — månadsbrickor mot 6-månaderssnitt, vecka, rekord
+│   ├── plan.tsx           Planera — kalender med träningsdagar (+ pass per dag) + rutiner
 │   └── settings.tsx       Gym (namn, lägg till) + versionsmarkör
 ├── log/[exerciseId].tsx   LOGGVYN — appens hjärta
 ├── session/end.tsx        Avsluta pass: känsla + anteckning
@@ -44,12 +44,12 @@ app/
 ├── library.tsx            Övningsbibliotek med sök (nås från Inställningar)
 ├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 └── exercise/[id].tsx      Redigera övning: namn, engelskt namn, viktenhet, steg
-components/  ui.tsx (Card/Button/Chip/Empty/Loading/SearchField) · ExerciseRow.tsx
+components/  ui.tsx (Card/Button/Chip/StatTile/Empty/Loading/SearchField) · ExerciseRow.tsx
              · WeekRing.tsx (SVG) · FillBar.tsx · StartSheet.tsx · MonthCalendar.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
 ├── format.ts   svenska tal ("2,5 kg"), volym i ton, "50 kg × 10, 10, 9", relativa datum
-├── dates.ts    veckostart (måndag), datumnycklar, månadsrutnät
+├── dates.ts    veckostart (måndag), datumnycklar, månadsrutnät, månadsspann, hälsning
 ├── muscles.ts  muskelnycklar → svenska visningsnamn
 ├── release.ts  RELEASE — byggmarkören, BUMPA PER RELEASE
 └── db/
@@ -84,7 +84,7 @@ routine     id, name
 routine_item id, routine_id, exercise_id, position
 session_skip id, session_id, exercise_id      -- överhoppat i ETT pass
 app_setting  key, value                        -- generell nyckel/värde
-planned_day  id, day ('YYYY-MM-DD', unikt)     -- planerade träningsdagar
+planned_day  id, day ('YYYY-MM-DD', unikt), routine_id?  -- planerade träningsdagar
 ```
 
 ### Kritiskt: övningsidentitet får aldrig splittras
@@ -134,6 +134,30 @@ Två beslut bakom det, båda efter användartest:
 
 Startvyn svarar på *när nästa pass är*, inte *hur många som återstår* — en plan i stället för
 ett betyg. Inget planerat är ett giltigt läge: vyn ber dig planera i stället för att hitta på.
+
+**Passet per dag är frivilligt.** `planned_day.routine_id` är nullbar, och en planerad dag utan
+pass är ett fullgott läge — designprincip 4 säger att programmet växer fram, så att välja dag
+får aldrig tvinga fram ett beslut om vad man ska köra. Två följdregler:
+
+- `setPlannedDay(day, false)` nollställer också passet. Väljer man dagen igen ska den vara tom,
+  annars kommer ett borttaget val tyst tillbaka.
+- `listPlannedDayPlans` joinar på `routine.deleted_at IS NULL` och rapporterar `routineId: null`
+  när planen är raderad. Dagen blir passlös i stället för trasig — ingen dinglande referens.
+
+### Startvyn: snabbstart i stället för ett enda förvalt pass
+Två chip-rader — de tre vanligaste gymmen (`listTopGyms`) och de tre vanligaste passen
+(`listTopRoutines`) — plus "På egen hand". "Vanligast" är antal pass, med senast använd som
+utslag; nya gym och planer har noll pass och hamnar sist men försvinner aldrig.
+
+`withSelection()` i `index.tsx` lägger alltid till det som faktiskt är valt om det ramlat utanför
+topp tre. Utan det kan en markering hamna utanför chipsen och se ut att ha försvunnit.
+
+Förvalt pass: **dagens planerade pass vinner** över senast körda. Har du bestämt vad idag ska
+vara är det svaret på "vad ska jag köra". Bottenarket (`StartSheet`) ligger kvar bakom "Fler gym
+och planer" för allt utanför topp tre och för att lägga till gym.
+
+Hälsningen är tidsanpassad (`greeting()` i `lib/dates.ts`), inte en fast rad. Ton B: en hälsning,
+ingen coach — och en fast rad hade sagt exakt samma sak varje dag.
 
 **`'localtime'` är obligatoriskt** i all SQL som grupperar på datum. `ended_at` lagras i UTC,
 och ett pass som avslutas 00:30 svensk sommartid är 22:30 UTC dagen innan — utan modifieraren
@@ -347,6 +371,11 @@ telefonen. Testa den så här:
 - **Planeringskalender** ✅ Veckodagschippen ersatta av en månadskalender med riktiga datum
   (`planned_day`). Startvyn visar nästa planerade dag. Rättade samtidigt en tidszonsbugg:
   datumgruppering utan `'localtime'` la nattpass på fel dag.
+- **Snabbstart** ✅ Migration 7 (`planned_day.routine_id`): pass per planerad dag i Planera,
+  chip-rader för de tre vanligaste gymmen och passen på startvyn, tidsanpassad hälsning, och
+  veckoraden i Följ upp utbytt mot fyra månadsbrickor (pass, flyttat, set, per pass) mätta mot
+  snittet av de senaste sex månaderna. Nya aggregat: `listTopGyms`, `listTopRoutines`,
+  `listPlannedDayPlans`, `setPlannedDayRoutine`, `plannedRoutineForDay`, `monthlyTotals`.
 - **Nästa** — nästa-kort under passet (lätt version av 1c: tydligt kort överst, **utan** den
   ritade banan och den pulserande noden), sedan progression per maskin och träningsfrekvens
   i Följ upp. `react-native-svg` finns redan ⇒ OTA.
@@ -354,8 +383,10 @@ telefonen. Testa den så här:
 ### Bortvalt ur designspecen (beslutat 2026-08-03)
 `docs/design/gymma-polering-spec.md` beskriver mer än vi bygger. **Celebration-överlägget
 (Skärm 4) och nivåer/märken (Skärm 5) byggs inte.** De hjälper dig inte träna, och Thomas bad
-uttryckligen om färre funktioner hellre än fler. Veckoraden ur Skärm 5 är däremot byggd — den
-ligger i Följ upp.
+uttryckligen om färre funktioner hellre än fler.
+
+Veckoraden ur Skärm 5 byggdes först i Följ upp men **togs bort igen** — sju rutor svarar på
+"vilka dagar", inte på "hur går det", och månadsbrickorna gör jobbet bättre. Återinför den inte.
 - **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
@@ -363,7 +394,8 @@ ligger i Följ upp.
 - **Sprint 4** — Mistral vision för okända maskiner, fritextinmatning, sammanslagning av
   dubbletter (`merged_into_id` finns redan).
 - **Följ upp** — progression per maskin (linje, gymmarkerad), volym per muskelgrupp (stapel),
-  träningsfrekvens. `react-native-svg`. Enda återstående skalet.
+  träningsfrekvens. `react-native-svg` finns redan ⇒ OTA. Brickorna och rekorden finns; det
+  här är kurvorna som saknas.
 - **Bild per övning/maskin** — `machine.photo_uri` finns redan i schemat; kräver
   `expo-image-picker` (ny native-modul ⇒ nytt bygge). Buntas lämpligen med kameran i sprint 3.
 - **Sprint 6** — JSON-export/import till Filer, felhantering, polering.

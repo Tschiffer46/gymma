@@ -4,4 +4,4 @@
 // bump garanterat går ut som en OTA och aldrig råkar ändra native-fingerprintet
 // (vilket skulle tvinga fram ett nytt bygge i stället för en OTA). Markören är
 // därmed ett pålitligt kvitto på vilken JS-uppdatering telefonen faktiskt kör.
-export const RELEASE = "Planeringskalender";
+export const RELEASE = "Snabbstart";
