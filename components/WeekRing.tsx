@@ -2,11 +2,9 @@ import { Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { colors } from "@/lib/theme";
 
-const SIZE = 132;
-const RADIUS = 57;
-const STROKE = 11;
-/** Omkretsen: 2πr ≈ 358. Hela strecklängden, som offset räknas ifrån. */
-const CIRCUMFERENCE = Math.round(2 * Math.PI * RADIUS);
+const BASE_SIZE = 132;
+const BASE_RADIUS = 57;
+const BASE_STROKE = 11;
 
 /**
  * Veckoringen — hur många pass av målet som är avklarade.
@@ -20,24 +18,38 @@ const CIRCUMFERENCE = Math.round(2 * Math.PI * RADIUS);
  * verifiera härifrån, och rörelsen som specen faktiskt efterfrågar sitter i
  * volymstaven, som är ren `View` och därmed riskfri.
  */
-export function WeekRing({ done, target }: { done: number; target: number }) {
+export function WeekRing({
+  done,
+  target,
+  size = BASE_SIZE,
+}: {
+  done: number;
+  target: number;
+  size?: number;
+}) {
+  // Allt skalas från 132-designen, så proportionerna håller i alla storlekar.
+  const scale = size / BASE_SIZE;
+  const RADIUS = BASE_RADIUS * scale;
+  const STROKE = BASE_STROKE * scale;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
   const share = target > 0 ? Math.min(1, done / target) : 0;
   const offset = CIRCUMFERENCE * (1 - share);
 
   return (
-    <View style={{ width: SIZE, height: SIZE }}>
-      <Svg width={SIZE} height={SIZE} style={{ transform: [{ rotate: "-90deg" }] }}>
+    <View style={{ width: size, height: size }}>
+      <Svg width={size} height={size} style={{ transform: [{ rotate: "-90deg" }] }}>
         <Circle
-          cx={SIZE / 2}
-          cy={SIZE / 2}
+          cx={size / 2}
+          cy={size / 2}
           r={RADIUS}
           stroke={colors.cardHi}
           strokeWidth={STROKE}
           fill="none"
         />
         <Circle
-          cx={SIZE / 2}
-          cy={SIZE / 2}
+          cx={size / 2}
+          cy={size / 2}
           r={RADIUS}
           stroke={colors.accent}
           strokeWidth={STROKE}
@@ -62,16 +74,16 @@ export function WeekRing({ done, target }: { done: number; target: number }) {
       >
         <Text
           style={{
-            fontSize: 40,
+            fontSize: Math.round(40 * scale),
             fontWeight: "700",
-            letterSpacing: -1.5,
+            letterSpacing: -1.5 * scale,
             color: colors.ink,
             fontVariant: ["tabular-nums"],
           }}
         >
           {done}
         </Text>
-        <Text style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 3 }}>
+        <Text style={{ fontSize: Math.round(13 * scale), fontWeight: "600", color: colors.muted, marginTop: 3 }}>
           av {target} pass
         </Text>
       </View>

@@ -903,30 +903,73 @@ export async function sessionVolumeKg({ db }: Store, sessionId: string): Promise
 }
 
 /**
- * Veckomålet, härlett i stället för inställt.
+ * Vilka veckodagar du faktiskt tränade en viss vecka.
  *
- * Medianen av antal pass per vecka de senaste sex veckorna, golv 2 och tak 6.
- * Att härleda det betyder att målet följer med när vanan ändras, och att
- * användaren aldrig behöver ställa in något — hade det varit en inställning
- * skulle den bli fel och sedan ligga kvar och skava.
+ * Index 0–6 är söndag–lördag, samma som `strftime('%w')` och `Date#getDay()`,
+ * så veckoraden i Följ upp och dagväljaren i Planera talar samma språk.
  */
-export async function weeklyTarget({ db }: Store, weekStartIso: string): Promise<number> {
-  const from = new Date(Date.parse(weekStartIso) - 6 * 7 * 86_400_000).toISOString();
-  const rows = await db.getAllAsync<{ ended_at: string }>(
-    `SELECT ended_at FROM session
-     WHERE deleted_at IS NULL AND ended_at IS NOT NULL AND ended_at >= ? AND ended_at < ?`,
-    [from, weekStartIso],
+export async function sessionsPerWeekday(
+  { db }: Store,
+  weekStartIso: string,
+): Promise<boolean[]> {
+  const weekEnd = new Date(Date.parse(weekStartIso) + 7 * 86_400_000).toISOString();
+  const rows = await db.getAllAsync<{ dow: number }>(
+    `SELECT DISTINCT CAST(strftime('%w', ended_at) AS INTEGER) AS dow
+     FROM session
+     WHERE deleted_at IS NULL AND ended_at >= ? AND ended_at < ?`,
+    [weekStartIso, weekEnd],
   );
+  const out = new Array(7).fill(false);
+  for (const r of rows) out[r.dow] = true;
+  return out;
+}
 
-  const buckets = new Array(6).fill(0);
-  for (const r of rows) {
-    const weeksAgo = Math.floor((Date.parse(weekStartIso) - Date.parse(r.ended_at)) / (7 * 86_400_000));
-    if (weeksAgo >= 0 && weeksAgo < 6) buckets[weeksAgo]++;
+// ---------------------------------------------------------------------------
+// Inställningar
+// ---------------------------------------------------------------------------
+
+export async function getSetting({ db }: Store, key: string): Promise<string | null> {
+  const row = await db.getFirstAsync<{ value: string }>(
+    "SELECT value FROM app_setting WHERE key = ? AND deleted_at IS NULL",
+    [key],
+  );
+  return row?.value ?? null;
+}
+
+export async function setSetting({ db, now }: Store, key: string, value: string): Promise<void> {
+  const t = now();
+  await db.runAsync(
+    `INSERT INTO app_setting (key, value, created_at, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at,
+                                    deleted_at = NULL`,
+    [key, value, t, t],
+  );
+}
+
+const TRAINING_DAYS_KEY = "training_days";
+
+/**
+ * Veckodagarna du tänkt träna, som `strftime('%w')`-nummer.
+ *
+ * Tom lista = inget valt än. Det är ett giltigt tillstånd, inte ett fel:
+ * startvyn ber dig välja i stället för att hitta på ett mål åt dig.
+ */
+export async function getTrainingDays(store: Store): Promise<number[]> {
+  const raw = await getSetting(store, TRAINING_DAYS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6)
+      : [];
+  } catch {
+    return [];
   }
+}
 
-  const sorted = [...buckets].sort((a, b) => a - b);
-  const median = (sorted[2] + sorted[3]) / 2;
-  return Math.min(6, Math.max(2, Math.round(median)));
+export async function setTrainingDays(store: Store, days: number[]): Promise<void> {
+  const clean = [...new Set(days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
+  await setSetting(store, TRAINING_DAYS_KEY, JSON.stringify(clean));
 }
 
 /**

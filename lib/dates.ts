@@ -26,5 +26,35 @@ export function weekdayName(dow: number): string {
   return WEEKDAYS[dow] ?? "";
 }
 
-/** Måndag först — ordningen veckoraden visas i. */
-export const WEEKDAY_SHORT = ["Mån", "Tis", "Ons", "Tor", "Fre", "Lör", "Sön"];
+/** Måndag först — ordningen veckoraden visas i. Värdet är `strftime('%w')`-numret. */
+export const WEEKDAYS_MONDAY_FIRST: { dow: number; short: string }[] = [
+  { dow: 1, short: "Mån" },
+  { dow: 2, short: "Tis" },
+  { dow: 3, short: "Ons" },
+  { dow: 4, short: "Tor" },
+  { dow: 5, short: "Fre" },
+  { dow: 6, short: "Lör" },
+  { dow: 0, short: "Sön" },
+];
+
+/**
+ * Nästa dag du tänkt träna.
+ *
+ * `daysFromNow: 0` betyder att i dag är en träningsdag. Är listan tom finns
+ * inget att svara — då säger startvyn i stället att dagarna inte är valda ännu.
+ *
+ * Ren funktion utan databasberoende, så den kan testas direkt.
+ */
+export function nextTrainingDay(
+  days: number[],
+  from: Date = new Date(),
+): { dow: number; daysFromNow: number } | null {
+  if (days.length === 0) return null;
+
+  const today = from.getDay();
+  for (let ahead = 0; ahead < 7; ahead++) {
+    const dow = (today + ahead) % 7;
+    if (days.includes(dow)) return { dow, daysFromNow: ahead };
+  }
+  return null;
+}

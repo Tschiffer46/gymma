@@ -3,9 +3,18 @@ import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { createRoutine, listRoutines, useStore, type RoutineSummary } from "@/lib/db";
-import { Button, Empty, Loading } from "@/components/ui";
-import { colors } from "@/lib/theme";
+import {
+  createRoutine,
+  getTrainingDays,
+  listRoutines,
+  setTrainingDays,
+  useStore,
+  usualWeekdays,
+  type RoutineSummary,
+} from "@/lib/db";
+import { Button, Empty, Loading, SectionLabel } from "@/components/ui";
+import { WEEKDAYS_MONDAY_FIRST, weekdayName } from "@/lib/dates";
+import { colors, radius } from "@/lib/theme";
 
 /**
  * "Planera" — sparade ordningar av övningar.
@@ -19,6 +28,8 @@ export default function PlanScreen() {
   const router = useRouter();
 
   const [routines, setRoutines] = useState<RoutineSummary[]>([]);
+  const [days, setDays] = useState<number[]>([]);
+  const [suggestion, setSuggestion] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -26,8 +37,29 @@ export default function PlanScreen() {
 
   const load = useCallback(async () => {
     setRoutines(await listRoutines(store));
+    const chosen = await getTrainingDays(store);
+    setDays(chosen);
+
+    // Har du inte valt än: föreslå utifrån vad du faktiskt brukar göra. Det
+    // gör förstagångsvalet till ett tryck i stället för en fundering.
+    if (chosen.length === 0) {
+      const usual = await usualWeekdays(store, new Date().toISOString());
+      setSuggestion(
+        usual.length === 2
+          ? `Du brukar träna ${weekdayName(usual[0]).toLowerCase()} och ${weekdayName(usual[1]).toLowerCase()}.`
+          : null,
+      );
+    } else {
+      setSuggestion(null);
+    }
     setLoading(false);
   }, [store]);
+
+  async function toggleDay(dow: number) {
+    const next = days.includes(dow) ? days.filter((d) => d !== dow) : [...days, dow];
+    setDays(next);
+    await setTrainingDays(store, next);
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -56,7 +88,47 @@ export default function PlanScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Text className="pb-1 pt-2 text-3xl font-bold tracking-tight text-ink">Planera</Text>
-        <Text className="mb-6 text-[14px] leading-5 text-muted">
+
+        {/* Träningsdagarna först: de svarar på NÄR, rutinerna på VAD. */}
+        <View className="mb-8 mt-4">
+          <SectionLabel>Vilka dagar tänker du träna?</SectionLabel>
+          <View className="mt-3 flex-row" style={{ gap: 6 }}>
+            {WEEKDAYS_MONDAY_FIRST.map(({ dow, short }) => {
+              const active = days.includes(dow);
+              return (
+                <Pressable
+                  key={dow}
+                  onPress={() => toggleDay(dow)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={short}
+                  className={`flex-1 items-center justify-center border active:opacity-70 ${
+                    active ? "border-accent bg-accent-soft" : "border-line"
+                  }`}
+                  style={{ height: 52, borderRadius: radius.sm }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12.5,
+                      fontWeight: "600",
+                      color: active ? colors.accent : colors.mutedDim,
+                    }}
+                  >
+                    {short}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text className="mt-2.5 text-[13px] leading-[18px] text-muted">
+            {days.length === 0
+              ? suggestion ?? "Välj dagarna du siktar på. Startskärmen visar sedan när nästa pass är."
+              : `${days.length} ${days.length === 1 ? "dag" : "dagar"} i veckan. Startskärmen räknar mot det.`}
+          </Text>
+        </View>
+
+        <SectionLabel>Dina planer</SectionLabel>
+        <Text className="mb-4 mt-1.5 text-[13px] leading-[18px] text-muted">
           En plan är en sparad ordning, inte ett schema. Du kan alltid logga något som inte står
           i den.
         </Text>

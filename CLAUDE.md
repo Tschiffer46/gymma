@@ -83,6 +83,7 @@ set_entry   id, session_id, machine_id?, exercise_id, weight_kg, reps, set_index
 routine     id, name
 routine_item id, routine_id, exercise_id, position
 session_skip id, session_id, exercise_id      -- överhoppat i ETT pass
+app_setting  key, value                        -- t.ex. training_days
 ```
 
 ### Kritiskt: övningsidentitet får aldrig splittras
@@ -115,6 +116,22 @@ Volym per muskelgrupp aggregeras däremot över allt.
 Enheten visas alltid explicit i loggvyn (`12 kg/hantel`) — blandas konventionerna blir
 volymkurvan brus. Detta är ett tillägg utöver specen, som bara har `type` och därmed inte kan
 skilja hantlar från skivstång.
+
+### Träningsdagar: målet sätts, det härleds inte
+`app_setting['training_days']` håller veckodagarna du valt i Planera, som en JSON-array med
+`strftime('%w')`-nummer (0 = söndag).
+
+Startvyn räknade tidigare mot ett **härlett** veckomål (medianen av senaste sex veckorna).
+Det togs bort efter användartest 2026-08-03: "Två pass kvar den här veckan" utan att kunna se
+var tvåan kom ifrån är brus, och ett osynligt mål går inte att ifrågasätta. **Återinför inte
+`weeklyTarget()`.**
+
+Startvyn svarar nu på *när nästa pass är*, inte *hur många som återstår* — en plan i stället
+för ett betyg. Tom lista är ett giltigt tillstånd: då ber vyn dig välja i stället för att hitta
+på ett mål åt dig.
+
+`usualWeekdays()` finns kvar men har bytt roll: den föreslår dagar i Planera första gången,
+den styr ingenting.
 
 ### Rutiner är en sparad ordning, aldrig ett krav
 `routine` + `routine_item` (position 0,1,2…) och `session.routine_id`. Designprincip 4 gäller
@@ -316,12 +333,21 @@ telefonen. Testa den så här:
 - **Polering 1** ✅ Loggvyn omritad enligt `docs/design/gymma-polering-spec.md` (riktning 1d):
   vikten 96 px och tabulär, setpips, cyklande viktstegsetikett i stället för tre chip,
   PB-chip via `bestWeightOnMachine`, samt mikro-feedback (pop, pip-fyllning, toast).
-- **Polering 2** ✅ Startvyn omritad enligt riktning 1b: veckoring (SVG), härlett veckomål,
-  volym mot förra veckan med animerad stav, PB-rad, och "Starta {plan}" med gymval + rutiner
-  flyttade till ett bottenark. Nya aggregat: `weekSummary`, `weeklyTarget`, `usualWeekdays`,
-  `recentPbs`, `sessionVolumeKg`, `lastUsedRoutine`, `averageSessionMinutes`.
-- **Polering 3–5** — pågående pass som bana (1c), celebration när planen är klar, samt
-  nivå & märken (1f). Specen ligger i `docs/design/`.
+- **Polering 2** ✅ Startvyn omritad (riktning 1b): veckoring (SVG), volym mot förra veckan,
+  PB-rad, "Starta {plan}" med gymval + rutiner i ett bottenark. Nya aggregat: `weekSummary`,
+  `usualWeekdays`, `recentPbs`, `sessionVolumeKg`, `lastUsedRoutine`, `averageSessionMinutes`.
+- **Träningsdagar** ✅ Det härledda veckomålet ersatt av dagar du väljer själv i Planera.
+  Startvyn visar nästa träningsdag. Volym och rekord flyttade till Följ upp, som därmed
+  slutade vara ett skal.
+- **Nästa** — nästa-kort under passet (lätt version av 1c: tydligt kort överst, **utan** den
+  ritade banan och den pulserande noden), sedan progression per maskin och träningsfrekvens
+  i Följ upp. `react-native-svg` finns redan ⇒ OTA.
+
+### Bortvalt ur designspecen (beslutat 2026-08-03)
+`docs/design/gymma-polering-spec.md` beskriver mer än vi bygger. **Celebration-överlägget
+(Skärm 4) och nivåer/märken (Skärm 5) byggs inte.** De hjälper dig inte träna, och Thomas bad
+uttryckligen om färre funktioner hellre än fler. Veckoraden ur Skärm 5 är däremot byggd — den
+ligger i Följ upp.
 - **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om

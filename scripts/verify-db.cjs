@@ -7,17 +7,53 @@
  * Klockan är injicerad, så vi kan hoppa fram en dag och testa att "förra
  * passet"-logiken faktiskt hittar rätt pass.
  *
- * Körs med `npm run test:db` (kompilerar först TS → CJS i .verify/).
+ * Körs med `npm run test:db`.
+ *
+ * Skriptet kompilerar SJÄLV de rena TS-filerna till CJS i .verify/ i stället
+ * för att göra det i package.json. Skälet är byggmekaniskt: `package.json` →
+ * `scripts` ligger i EAS native-fingerprint, så varje ny testfil i en
+ * kommandorad hade tvingat fram ett helt EAS-bygge. Med filistan här inne är
+ * den kostnaden borta för gott.
  */
 const { DatabaseSync } = require("node:sqlite");
 const { randomUUID } = require("node:crypto");
+const { execFileSync } = require("node:child_process");
 const path = require("path");
+
+/** Rena filer utan expo-/react-importer — det som gör testet möjligt i Node. */
+const PURE_SOURCES = [
+  "lib/db/core.ts",
+  "lib/db/queries.ts",
+  "lib/db/migrations.ts",
+  "lib/db/seed.ts",
+  "lib/db/match.ts",
+  "lib/db/types.ts",
+  "lib/dates.ts",
+];
+
+const ROOT = path.join(__dirname, "..");
+execFileSync(
+  path.join(ROOT, "node_modules", ".bin", "tsc"),
+  [
+    ...PURE_SOURCES,
+    "--outDir", ".verify",
+    "--rootDir", ".",
+    "--module", "commonjs",
+    "--target", "es2022",
+    "--moduleResolution", "node",
+    "--skipLibCheck",
+    "--ignoreConfig",
+    "--ignoreDeprecations", "6.0",
+  ],
+  { cwd: ROOT, stdio: "inherit" },
+);
 
 const OUT = path.join(__dirname, "..", ".verify", "lib", "db");
 const core = require(path.join(OUT, "core.js"));
 const q = require(path.join(OUT, "queries.js"));
 const { normalizeName } = require(path.join(OUT, "match.js"));
 const { MIGRATIONS } = require(path.join(OUT, "migrations.js"));
+const dates = require(path.join(__dirname, "..", ".verify", "lib", "dates.js"));
 
 let failures = 0;
 let checks = 0;
@@ -601,10 +637,8 @@ async function main() {
   eq(afterOne.volumeKg, 1200, "veckovolymen använder samma formel");
   eq(afterOne.prevVolumeKg, 0, "förra veckan var tom");
 
-  console.log("Veckomål härlett ur vanan");
-  eq(await q.weeklyTarget(wstore, weekStart), 2, "utan historik blir målet golvet 2");
-
-  // Fyra pass i veckan, fyra veckor bakåt ⇒ medianen blir 4.
+  // Fyra pass i veckan, fyra veckor bakåt — underlag för "vanliga dagar" och
+  // för att förra veckan ska ha volym.
   for (let week = 1; week <= 4; week++) {
     for (let i = 0; i < 4; i++) {
       wclock = Date.parse(weekStart) - week * 7 * 86_400_000 + i * 86_400_000;
@@ -618,8 +652,7 @@ async function main() {
     }
   }
   wclock = Date.parse(weekStart) + 9 * 3600_000;
-  eq(await q.weeklyTarget(wstore, weekStart), 4, "målet blir medianen av veckorna bakåt");
-  ok((await q.weekSummary(wstore, weekStart)).prevVolumeKg > 0, "förra veckans volym hittas nu");
+  ok((await q.weekSummary(wstore, weekStart)).prevVolumeKg > 0, "förra veckans volym hittas");
 
   console.log("Vanliga träningsdagar");
   const usual = await q.usualWeekdays(wstore, new Date(wclock).toISOString());
@@ -673,6 +706,61 @@ async function main() {
     await q.averageSessionMinutes(wstore, "finns-inte"),
     null,
     "plan utan avslutade pass saknar snittlängd",
+  );
+
+  console.log("Träningsdagar");
+  eq((await q.getTrainingDays(wstore)).length, 0, "inga dagar valda från start");
+  await q.setTrainingDays(wstore, [1, 3, 5]);
+  eq(
+    (await q.getTrainingDays(wstore)).join(","),
+    "1,3,5",
+    "valda dagar sparas och läses tillbaka",
+  );
+  await q.setTrainingDays(wstore, [5, 1, 1, 3, 9, -2]);
+  eq(
+    (await q.getTrainingDays(wstore)).join(","),
+    "1,3,5",
+    "dubbletter och ogiltiga dagar rensas bort",
+  );
+  await q.setTrainingDays(wstore, []);
+  eq((await q.getTrainingDays(wstore)).length, 0, "går att nollställa");
+  await q.setTrainingDays(wstore, [1, 3, 5]);
+
+  eq(await q.getSetting(wstore, "finns-inte"), null, "okänd inställning ger null");
+  await q.setSetting(wstore, "temp", "a");
+  await q.setSetting(wstore, "temp", "b");
+  eq(await q.getSetting(wstore, "temp"), "b", "inställning skriver över sig själv");
+
+  console.log("Tränade dagar i veckan");
+  const perDay = await q.sessionsPerWeekday(wstore, weekStart);
+  eq(perDay.length, 7, "sju dagar returneras");
+  eq(perDay.filter(Boolean).length, 1, "bara måndagens avslutade pass är markerat");
+  eq(perDay[1], true, "måndag är markerad");
+
+  const open = await q.startSession(wstore, wgym);
+  await q.logSet(wstore, {
+    sessionId: open.id, exerciseId: barbell.id, machineId: null,
+    weightKg: 60, reps: 8, setIndex: 1,
+  });
+  eq(
+    (await q.sessionsPerWeekday(wstore, weekStart)).filter(Boolean).length,
+    1,
+    "ett PÅGÅENDE pass markerar ingen dag — dagen räknas när passet är klart",
+  );
+  await q.endSession(wstore, open.id, { feeling: null, notes: null });
+
+  console.log("Nästa träningsdag");
+  // 2026-08-03 är en måndag.
+  const monday = new Date("2026-08-03T09:00:00.000Z");
+  eq(dates.nextTrainingDay([1, 3, 5], monday).daysFromNow, 0, "i dag är en träningsdag");
+  eq(dates.nextTrainingDay([3, 5], monday).dow, 3, "annars nästa valda dag framåt");
+  eq(dates.nextTrainingDay([3, 5], monday).daysFromNow, 2, "två dagar till onsdag");
+  eq(dates.nextTrainingDay([0], monday).daysFromNow, 6, "söndag ligger sex dagar bort");
+  eq(dates.nextTrainingDay([], monday), null, "utan valda dagar finns inget svar");
+  eq(
+    dates.nextTrainingDay([1], new Date("2026-08-04T09:00:00.000Z")).daysFromNow,
+    6,
+    "dagen efter en vald dag pekar på nästa vecka",
   );
 
   console.log("");
