@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import Animated, {
+  Easing,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
 import {
+  bestWeightOnMachine,
   deleteSet,
   getActiveGym,
   getCurrentSession,
@@ -13,23 +22,27 @@ import {
   getOrOpenSession,
   lastSets,
   logSet,
-  recentPerformances,
   setsInSession,
   setWeightStep,
   useStore,
   weightStepFor,
   type Exercise,
   type Machine,
-  type PastPerformance,
   type Session,
   type SetEntry,
 } from "@/lib/db";
-import { Button, Loading, Stepper } from "@/components/ui";
-import { fmtWeight, formatSets, relativeDay, weightUnitLabel } from "@/lib/format";
-import { colors } from "@/lib/theme";
+import { Loading } from "@/components/ui";
+import { fmtWeight, weightUnitLabel } from "@/lib/format";
+import { colors, radius, tint, TAP } from "@/lib/theme";
 
 /** Viktmagasin går i olika steg. Tre val räcker och slipper tangentbordet. */
 const STEP_OPTIONS = [2.5, 5, 10];
+
+/** Antal set att visa pips för när övningen aldrig körts förut. */
+const DEFAULT_PLANNED_SETS = 3;
+
+const NUMBER_WORDS = ["noll", "ett", "två", "tre", "fyra", "fem", "sex", "sju", "åtta", "nio", "tio"];
+const numberWord = (n: number) => NUMBER_WORDS[n] ?? String(n);
 
 type PrevSet = { weightKg: number; reps: number; setIndex: number };
 
@@ -59,6 +72,12 @@ function prefillFor(
   return { weightKg: exercise.weightUnit === "per_hand" ? 10 : 20, reps: 10 };
 }
 
+/**
+ * Loggvyn — en siffra i fokus (riktning 1d).
+ *
+ * Vikten äger skärmen. Allt annat är stödinformation eller tryckyta, och
+ * ordningen uppifrån och ned är: vad du gör → vad du gjorde → vad du trycker på.
+ */
 export default function LogScreen() {
   const { exerciseId } = useLocalSearchParams<{ exerciseId: string }>();
   const store = useStore();
@@ -66,16 +85,27 @@ export default function LogScreen() {
 
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [machine, setMachine] = useState<Machine | null>(null);
-  const [gymName, setGymName] = useState<string | null>(null);
   const [prev, setPrev] = useState<PrevSet[]>([]);
-  const [history, setHistory] = useState<PastPerformance[]>([]);
+  const [best, setBest] = useState<number | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [sets, setSets] = useState<SetEntry[]>([]);
   const [weight, setWeight] = useState(20);
   const [reps, setReps] = useState(10);
   const [step, setStep] = useState(5);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [listOpen, setListOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Vikten "poppar" när ett set loggas — kvittot på att trycket gick fram.
+  const popScale = useSharedValue(1);
+  const popOpacity = useSharedValue(1);
+  const popStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: popScale.value }],
+    opacity: popOpacity.value,
+  }));
 
   useEffect(() => {
     let cancelled = false;
@@ -89,16 +119,18 @@ export default function LogScreen() {
       const m = await getMachine(store, ex.id, gym.id);
       const cur = await getCurrentSession(store, gym.id);
       const previous = await lastSets(store, ex.id, cur?.id ?? null);
-      const past = await recentPerformances(store, ex.id, cur?.id ?? null, 3);
       const inSession = cur ? await setsInSession(store, cur.id, ex.id) : [];
+      const record = await bestWeightOnMachine(store, {
+        exerciseId: ex.id,
+        machineId: m?.id ?? null,
+      });
       const fill = prefillFor(inSession.length + 1, previous, inSession, ex);
 
       if (cancelled) return;
       setExercise(ex);
       setMachine(m);
-      setGymName(gym.name);
       setPrev(previous);
-      setHistory(past);
+      setBest(record);
       setSession(cur);
       setSets(inSession);
       setStep(weightStepFor(ex, m));
@@ -111,28 +143,55 @@ export default function LogScreen() {
     };
   }, [store, exerciseId]);
 
+  // Toast-timern måste städas, annars kan den skriva till en avmonterad skärm.
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    };
+  }, []);
+
+  function showFlash(text: string) {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlash(text);
+    flashTimer.current = setTimeout(() => setFlash(null), 1700);
+  }
+
   const save = useCallback(async () => {
     if (!exercise || busy) return;
     setBusy(true);
     try {
       const gym = await getActiveGym(store);
       if (!gym) return;
-      // Passet öppnas här, aldrig från listan — appen skapar inga tomma pass
-      // bara för att man tittar in.
+      // Passet öppnas här som skyddsnät — normalt finns det redan.
       const s = session ?? (await getOrOpenSession(store, gym.id));
+      const index = sets.length + 1;
       const entry = await logSet(store, {
         sessionId: s.id,
         exerciseId: exercise.id,
         machineId: machine?.id ?? null,
         weightKg: weight,
         reps,
-        setIndex: sets.length + 1,
+        setIndex: index,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      popScale.value = withSequence(
+        withTiming(0.82, { duration: 0 }),
+        withTiming(1.06, { duration: 130, easing: Easing.out(Easing.cubic) }),
+        withTiming(1, { duration: 130, easing: Easing.out(Easing.cubic) }),
+      );
+      popOpacity.value = withSequence(
+        withTiming(0.4, { duration: 0 }),
+        withTiming(1, { duration: 260, easing: Easing.out(Easing.cubic) }),
+      );
+
+      const unit = weightUnitLabel(exercise.weightUnit === "per_hand");
+      showFlash(`Set ${index} loggat · ${fmtWeight(weight)} ${unit} × ${reps}`);
 
       const nextSets = [...sets, entry];
       setSession(s);
       setSets(nextSets);
+      if (best === null || weight > best) setBest(weight);
 
       // Förifyll nästa set från förra passets motsvarande set om det finns —
       // annars står värdena kvar, vilket är rätt för raka set.
@@ -142,7 +201,7 @@ export default function LogScreen() {
     } finally {
       setBusy(false);
     }
-  }, [exercise, machine, session, sets, prev, weight, reps, store, busy]);
+  }, [exercise, machine, session, sets, prev, weight, reps, best, store, busy, popScale, popOpacity]);
 
   async function undoLast() {
     const last = sets[sets.length - 1];
@@ -150,20 +209,36 @@ export default function LogScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await deleteSet(store, last.id);
     setSets(sets.slice(0, -1));
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setFlash(null);
   }
 
-  async function chooseStep(next: number) {
+  /** Ett tryck cyklar 2,5 → 5 → 10 och sparar valet där det hör hemma. */
+  async function cycleStep() {
     if (!exercise) return;
     Haptics.selectionAsync();
+    const next = STEP_OPTIONS[(STEP_OPTIONS.indexOf(step) + 1) % STEP_OPTIONS.length];
     setStep(next);
     await setWeightStep(store, { exerciseId: exercise.id, machineId: machine?.id ?? null }, next);
+  }
+
+  function bump(kind: "weight" | "reps", dir: 1 | -1) {
+    Haptics.selectionAsync();
+    if (kind === "weight") {
+      // Flyttalsaddition ger 47.50000000000001 — avrunda till stegets upplösning.
+      const next = Math.round((weight + dir * step) * 100) / 100;
+      if (next >= 0) setWeight(next);
+    } else {
+      const next = reps + dir;
+      if (next >= 1) setReps(next);
+    }
   }
 
   if (loading) return <Loading />;
 
   if (!exercise) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-bg px-8" edges={["bottom"]}>
+      <SafeAreaView className="flex-1 items-center justify-center bg-bg px-8">
         <Text className="text-center text-ink">Övningen hittades inte.</Text>
       </SafeAreaView>
     );
@@ -171,125 +246,392 @@ export default function LogScreen() {
 
   const perHand = exercise.weightUnit === "per_hand";
   const unit = weightUnitLabel(perHand);
-  const meta = [machine?.manufacturer, gymName].filter(Boolean).join(" · ");
+  const meta = [machine?.manufacturer, machine?.seatSettings].filter(Boolean).join(" · ");
+
+  const planned = prev.length || DEFAULT_PLANNED_SETS;
+  const nextIndex = sets.length + 1;
+  const pipTotal = Math.max(planned, nextIndex);
+  const corresponding = prev.find((s) => s.setIndex === nextIndex);
+
+  const helper =
+    prev.length === 0
+      ? "Första gången — sätt en startvikt."
+      : corresponding
+        ? `Förra passet: ${fmtWeight(corresponding.weightKg)} ${unit} × ${corresponding.reps}`
+        : `Extraset — förra passet stannade på ${numberWord(prev.length)}`;
+
+  const isPb = best !== null && weight > best;
+  const allLogged = sets.length >= planned;
 
   return (
-    <SafeAreaView className="flex-1 bg-bg" edges={["bottom", "left", "right"]}>
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 12 }}>
-        <Text className="text-[28px] font-bold uppercase tracking-tight text-ink">
-          {exercise.name}
-        </Text>
-        {meta ? <Text className="mt-1 text-[14px] text-muted">{meta}</Text> : null}
-        {machine?.seatSettings ? (
-          <Text className="mt-0.5 text-[14px] text-muted">{machine.seatSettings}</Text>
-        ) : null}
+    <SafeAreaView className="flex-1 bg-bg" edges={["top", "bottom", "left", "right"]}>
+      {/* 1. Topp — vem du är hos, och hur långt du kommit */}
+      <View className="flex-row items-center gap-2.5" style={{ paddingHorizontal: 18 }}>
+        <Pressable
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Tillbaka"
+          hitSlop={10}
+          className="active:opacity-60"
+        >
+          <Feather name="chevron-left" size={24} color={colors.muted} />
+        </Pressable>
 
-        {history.length > 0 ? (
-          <View className="mt-6">
-            <Text className="text-[11px] font-semibold uppercase tracking-widest text-muted">
-              Senaste gångerna
-            </Text>
-            <View className="mt-2.5 gap-1.5">
-              {history.map((h, i) => (
-                <View key={h.sessionId} className="flex-row items-baseline gap-3">
-                  <Text
-                    className="text-[13px] text-muted"
-                    style={{ width: 96 }}
-                    numberOfLines={1}
-                  >
-                    {relativeDay(h.performedAt)}
-                  </Text>
-                  <Text
-                    className={`flex-1 text-[15px] ${i === 0 ? "font-semibold text-ink" : "text-muted"}`}
-                  >
-                    {formatSets(h.sets, perHand)}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        ) : (
-          <Text className="mt-6 text-[15px] text-muted">Första gången — sätt en startvikt.</Text>
-        )}
-
-        {sets.length > 0 ? (
-          <View className="mt-5 gap-1.5">
-            {sets.map((s, i) => {
-              const isLast = i === sets.length - 1;
-              return (
-                <View
-                  key={s.id}
-                  className="flex-row items-center gap-3 rounded-[12px] border border-line bg-card px-4 py-3"
-                >
-                  <Feather name="check" size={17} color={colors.ok} />
-                  <Text className="text-[15px] text-muted">Set {s.setIndex}</Text>
-                  <Text className="flex-1 text-[15px] font-semibold text-ink">
-                    {fmtWeight(s.weightKg)} {unit} × {s.reps}
-                  </Text>
-                  {isLast ? (
-                    <Pressable
-                      onPress={undoLast}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Ångra set ${s.setIndex}`}
-                      hitSlop={12}
-                      className="active:opacity-60"
-                    >
-                      <Feather name="x" size={19} color={colors.muted} />
-                    </Pressable>
-                  ) : null}
-                </View>
-              );
-            })}
-          </View>
-        ) : null}
-      </ScrollView>
-
-      {/* Tumzonen. Allt man rör under passet ligger här nere, fast förankrat. */}
-      <View className="gap-2.5 border-t border-line px-4 pb-1 pt-3">
-        {/* Etiketten säger vad knapparna gör, inte vad inställningen heter —
-            "Steg" ensamt gick inte att förstå utan att prova. */}
-        <View className="flex-row items-center gap-2">
-          <Text className="text-[12px] text-muted">
-            <Text className="font-semibold text-ink">+/−</Text> ändrar med
+        <View className="flex-1">
+          <Text
+            style={{ fontSize: 17, fontWeight: "700", letterSpacing: -0.2, color: colors.ink }}
+            numberOfLines={1}
+          >
+            {exercise.name}
           </Text>
-          {STEP_OPTIONS.map((s) => (
-            <Pressable
-              key={s}
-              onPress={() => chooseStep(s)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: step === s }}
-              className={`rounded-full border px-3 py-1.5 active:opacity-70 ${
-                step === s ? "border-accent bg-accent-soft" : "border-line"
-              }`}
-            >
-              <Text
-                className="text-[13px] font-semibold"
-                style={{ color: step === s ? colors.accent : colors.muted }}
-              >
-                {fmtWeight(s)} kg
-              </Text>
-            </Pressable>
-          ))}
+          {meta ? (
+            <Text style={{ fontSize: 12.5, color: colors.muted }} numberOfLines={1}>
+              {meta}
+            </Text>
+          ) : null}
         </View>
 
-        <Stepper
-          label="vikt"
-          value={weight}
-          unit={unit}
-          step={step}
-          decimals
-          onChange={setWeight}
-        />
-        <Stepper label="reps" value={reps} unit="reps" step={1} min={1} onChange={setReps} />
-
-        <Button
-          label={`Logga set ${sets.length + 1}`}
-          icon="check"
-          onPress={save}
-          loading={busy}
-        />
-        <Button label="Klar" variant="ghost" onPress={() => router.back()} />
+        <View className="flex-row items-center" style={{ gap: 5 }}>
+          {Array.from({ length: pipTotal }).map((_, i) => (
+            <Pip key={i} filled={i < sets.length} />
+          ))}
+        </View>
       </View>
+
+      {/* 2. Mitten — en siffra i fokus */}
+      <View className="flex-1 items-center justify-center px-6">
+        <Text
+          style={{
+            fontSize: 11,
+            fontWeight: "600",
+            letterSpacing: 1.76,
+            color: colors.muted,
+            textTransform: "uppercase",
+          }}
+        >
+          Set {nextIndex} av {pipTotal}
+        </Text>
+
+        <Animated.View
+          style={[popStyle, { flexDirection: "row", alignItems: "baseline", marginTop: 6 }]}
+        >
+          <Text
+            style={{
+              fontSize: 96,
+              fontWeight: "700",
+              letterSpacing: -4,
+              color: colors.ink,
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {fmtWeight(weight)}
+          </Text>
+          <Text
+            style={{ fontSize: 22, fontWeight: "600", color: colors.muted, marginLeft: 8 }}
+          >
+            {unit}
+          </Text>
+        </Animated.View>
+
+        <View style={{ flexDirection: "row", alignItems: "baseline", marginTop: 20 }}>
+          <Text
+            style={{
+              fontSize: 42,
+              fontWeight: "700",
+              letterSpacing: -1.4,
+              color: colors.ink,
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {reps}
+          </Text>
+          <Text style={{ fontSize: 16, fontWeight: "600", color: colors.muted, marginLeft: 7 }}>
+            reps
+          </Text>
+        </View>
+
+        <Text
+          style={{ fontSize: 13.5, color: colors.muted, marginTop: 26, textAlign: "center" }}
+        >
+          {helper}
+        </Text>
+
+        {isPb ? <PbChip /> : null}
+      </View>
+
+      {/* Setlistan konkurrerar inte med vikten — den ligger hopfälld tills man
+          faktiskt vill ångra något. */}
+      {sets.length > 0 ? (
+        <View style={{ paddingHorizontal: 18, marginBottom: 10 }}>
+          <Pressable
+            onPress={() => setListOpen((o) => !o)}
+            accessibilityRole="button"
+            className="flex-row items-center justify-center gap-1.5 active:opacity-60"
+            style={{ minHeight: 34 }}
+          >
+            <Text style={{ fontSize: 13, color: colors.muted }}>
+              {sets.length} {sets.length === 1 ? "set" : "set"} loggade
+            </Text>
+            <Feather name={listOpen ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} />
+          </Pressable>
+
+          {listOpen ? (
+            <ScrollView style={{ maxHeight: 132 }} className="mt-1">
+              <View style={{ gap: 6 }}>
+                {sets.map((s, i) => (
+                  <View
+                    key={s.id}
+                    className="flex-row items-center gap-3 border border-line bg-card px-4 py-2.5"
+                    style={{ borderRadius: radius.sm }}
+                  >
+                    <Feather name="check" size={15} color={colors.ok} />
+                    <Text style={{ fontSize: 14, color: colors.muted }}>Set {s.setIndex}</Text>
+                    <Text
+                      style={{
+                        flex: 1,
+                        fontSize: 14.5,
+                        fontWeight: "600",
+                        color: colors.ink,
+                        fontVariant: ["tabular-nums"],
+                      }}
+                    >
+                      {fmtWeight(s.weightKg)} {unit} × {s.reps}
+                    </Text>
+                    {i === sets.length - 1 ? (
+                      <Pressable
+                        onPress={undoLast}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Ångra set ${s.setIndex}`}
+                        hitSlop={12}
+                        className="active:opacity-60"
+                      >
+                        <Feather name="x" size={18} color={colors.muted} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* 3. Tumzonen — allt man rör under passet */}
+      <View style={{ paddingHorizontal: 18, paddingBottom: 6, gap: 12 }}>
+        <View className="flex-row items-center" style={{ gap: 10 }}>
+          <StepPad
+            icon="minus"
+            label={`Minska vikten med ${fmtWeight(step)} kilo`}
+            height={74}
+            onPress={() => bump("weight", -1)}
+          />
+          <Pressable
+            onPress={cycleStep}
+            accessibilityRole="button"
+            accessibilityLabel={`Viktsteg ${fmtWeight(step)} kilo. Tryck för att byta.`}
+            className="items-center justify-center active:opacity-60"
+            style={{ width: 76, height: 74 }}
+          >
+            <Text style={{ fontSize: 13, fontWeight: "600", color: colors.muted }}>
+              ±{fmtWeight(step)} kg
+            </Text>
+          </Pressable>
+          <StepPad
+            icon="plus"
+            label={`Öka vikten med ${fmtWeight(step)} kilo`}
+            height={74}
+            onPress={() => bump("weight", 1)}
+          />
+        </View>
+
+        <View className="flex-row items-center" style={{ gap: 10 }}>
+          <StepPad
+            icon="minus"
+            label="Minska reps"
+            height={56}
+            outlined
+            onPress={() => bump("reps", -1)}
+          />
+          <View className="items-center justify-center" style={{ width: 76, height: 56 }}>
+            <Text style={{ fontSize: 13, fontWeight: "600", color: colors.muted }}>reps</Text>
+          </View>
+          <StepPad
+            icon="plus"
+            label="Öka reps"
+            height={56}
+            outlined
+            onPress={() => bump("reps", 1)}
+          />
+        </View>
+
+        <Pressable
+          onPress={save}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={`Logga set ${nextIndex}`}
+          className="flex-row items-center justify-center gap-2.5 bg-accent active:opacity-80"
+          style={{ height: 68, borderRadius: radius.xl, opacity: busy ? 0.6 : 1 }}
+        >
+          <Feather name="check" size={21} color={colors.white} strokeWidth={2.8} />
+          <Text style={{ fontSize: 19, fontWeight: "600", color: colors.white }}>
+            Logga set {nextIndex}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          className="items-center justify-center active:opacity-60"
+          style={{ minHeight: 44 }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: "600", color: colors.muted }}>
+            {allLogged ? "Nästa övning" : "Klar med övningen"}
+          </Text>
+        </Pressable>
+      </View>
+
+      {flash ? <Toast text={flash} /> : null}
     </SafeAreaView>
+  );
+}
+
+/**
+ * Setpip. Fylls från `line` till `ok` med en färgövergång i stället för att
+ * bara byta färg — rörelsen är det som gör att man ser att något hände.
+ */
+function Pip({ filled }: { filled: boolean }) {
+  const progress = useSharedValue(filled ? 1 : 0);
+
+  useEffect(() => {
+    progress.value = withTiming(filled ? 1 : 0, { duration: 200 });
+  }, [filled, progress]);
+
+  const style = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(progress.value, [0, 1], [colors.line, colors.ok]),
+  }));
+
+  return <Animated.View style={[{ width: 9, height: 9, borderRadius: radius.pill }, style]} />;
+}
+
+/** Tryckyta för +/−. Höjden skiljer vikt (74) från reps (56) — vikten är viktigare. */
+function StepPad({
+  icon,
+  label,
+  height,
+  outlined,
+  onPress,
+}: {
+  icon: "plus" | "minus";
+  label: string;
+  height: number;
+  outlined?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      className="flex-1 items-center justify-center active:opacity-60"
+      style={{
+        height,
+        borderRadius: outlined ? radius.md : radius.xl,
+        backgroundColor: outlined ? "transparent" : colors.cardHi,
+        borderWidth: outlined ? 1 : 0,
+        borderColor: colors.line,
+      }}
+    >
+      <Feather name={icon} size={outlined ? 22 : 30} color={outlined ? colors.muted : colors.ink} />
+    </Pressable>
+  );
+}
+
+/** "Tyngre än någonsin på den här maskinen" — påstår bara det datan bär. */
+function PbChip() {
+  const y = useSharedValue(18);
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    y.value = withTiming(0, { duration: 320, easing: Easing.out(Easing.cubic) });
+    opacity.value = withTiming(1, { duration: 320, easing: Easing.out(Easing.cubic) });
+  }, [y, opacity]);
+
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: y.value }],
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 7,
+          marginTop: 18,
+          paddingVertical: 7,
+          paddingHorizontal: 14,
+          borderRadius: radius.pill,
+          backgroundColor: tint.ok,
+        },
+      ]}
+    >
+      <Feather name="trending-up" size={14} color={colors.ok} />
+      <Text style={{ fontSize: 13, fontWeight: "600", color: colors.ok }}>
+        Tyngre än någonsin på den här maskinen
+      </Text>
+    </Animated.View>
+  );
+}
+
+/** Kvitto på loggat set. Ligger ovanför tumzonen så den aldrig täcker knappen. */
+function Toast({ text }: { text: string }) {
+  const y = useSharedValue(18);
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    y.value = withTiming(0, { duration: 280, easing: Easing.out(Easing.cubic) });
+    opacity.value = withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) });
+  }, [y, opacity]);
+
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: y.value }],
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        style,
+        {
+          position: "absolute",
+          bottom: 180,
+          alignSelf: "center",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 9,
+          paddingVertical: 11,
+          paddingHorizontal: 18,
+          borderRadius: radius.pill,
+          borderWidth: 1,
+          borderColor: colors.line,
+          backgroundColor: colors.card,
+        },
+      ]}
+    >
+      <Feather name="check" size={16} color={colors.ok} />
+      <Text
+        style={{
+          fontSize: 14.5,
+          fontWeight: "600",
+          color: colors.ink,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {text}
+      </Text>
+    </Animated.View>
   );
 }

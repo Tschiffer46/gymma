@@ -747,6 +747,33 @@ export async function recentPerformances(
   }));
 }
 
+/**
+ * Tyngsta vikten som någonsin loggats — **per maskin, inte per övning**.
+ *
+ * 50 kg på en bröstpress är inte 50 kg på en annan; hävarmar och viktmagasin
+ * skiljer sig. Ett PB som räknades per övning skulle utlösas varje gång man
+ * bytte gym, vilket vore både fel och snabbt värdelöst.
+ *
+ * För fria vikter finns ingen maskin — då jämförs inom övningen, men bara mot
+ * set som också loggats utan maskin.
+ */
+export async function bestWeightOnMachine(
+  { db }: Store,
+  target: { exerciseId: string; machineId: string | null },
+): Promise<number | null> {
+  const row = target.machineId
+    ? await db.getFirstAsync<{ w: number | null }>(
+        "SELECT MAX(weight_kg) AS w FROM set_entry WHERE machine_id = ? AND deleted_at IS NULL",
+        [target.machineId],
+      )
+    : await db.getFirstAsync<{ w: number | null }>(
+        `SELECT MAX(weight_kg) AS w FROM set_entry
+         WHERE exercise_id = ? AND machine_id IS NULL AND deleted_at IS NULL`,
+        [target.exerciseId],
+      );
+  return row?.w ?? null;
+}
+
 export async function setsInSession(
   { db }: Store,
   sessionId: string,

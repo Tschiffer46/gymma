@@ -20,6 +20,14 @@ module.exports = {
         "accent-soft": "#3a2019",
         ok: "#4ea87a",
         danger: "#e0524a",
+        "muted-dim": "#6d6a65",
+      },
+      borderRadius: {
+        // Håll i synk med `radius` i lib/theme.ts.
+        sm: "12px",
+        md: "16px",
+        lg: "18px",
+        xl: "20px",
       },
     },
   },
