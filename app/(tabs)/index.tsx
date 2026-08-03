@@ -9,13 +9,14 @@ import {
   createGym,
   getCurrentSession,
   getRoutine,
-  getTrainingDays,
+  listPlannedDays,
+  nextPlannedDay,
   lastUsedRoutine,
   listExercisesForGym,
   listGymsByRecentUse,
   listRoutines,
   matchesQuery,
-  sessionsPerWeekday,
+  trainedDays,
   sessionSetCount,
   setActiveGym,
   skipExercise,
@@ -32,7 +33,7 @@ import { ExerciseRow } from "@/components/ExerciseRow";
 import { StartSheet } from "@/components/StartSheet";
 import { WeekRing } from "@/components/WeekRing";
 import { Button, Chip, Empty, Loading, SearchField } from "@/components/ui";
-import { nextTrainingDay, startOfWeekIso, weekdayName } from "@/lib/dates";
+import { addDaysIso, daysBetween, describeDay, startOfWeekIso, toDayKey } from "@/lib/dates";
 import { formatElapsed } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
 
@@ -93,8 +94,9 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
   const [gyms, setGyms] = useState<GymWithUse[]>([]);
   const [routines, setRoutines] = useState<RoutineSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [days, setDays] = useState<number[]>([]);
-  const [trainedThisWeek, setTrainedThisWeek] = useState<boolean[]>(new Array(7).fill(false));
+  const [plannedThisWeek, setPlannedThisWeek] = useState<string[]>([]);
+  const [trainedThisWeek, setTrainedThisWeek] = useState<string[]>([]);
+  const [next, setNext] = useState<string | null>(null);
   const [suggested, setSuggested] = useState<RoutineSummary | null>(null);
   const [suggestedMinutes, setSuggestedMinutes] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -107,8 +109,13 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
     // Förvalt: gymmet du tränade på senast. Oftast rätt, alltid ett tryck bort.
     setSelected((cur) => cur ?? list[0]?.id ?? null);
 
-    setDays(await getTrainingDays(store));
-    setTrainedThisWeek(await sessionsPerWeekday(store, startOfWeekIso()));
+    // Veckan går måndag–söndag; ringen räknar planerade pass i just den veckan.
+    const weekStart = startOfWeekIso();
+    const from = toDayKey(new Date(Date.parse(weekStart)));
+    const to = toDayKey(new Date(Date.parse(addDaysIso(weekStart, 6))));
+    setPlannedThisWeek(await listPlannedDays(store, from, to));
+    setTrainedThisWeek(await trainedDays(store, from, to));
+    setNext(await nextPlannedDay(store, toDayKey()));
 
     const last = await lastUsedRoutine(store);
     setSuggested(last);
@@ -142,31 +149,33 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
 
   const gymName = gyms.find((g) => g.id === selected)?.name ?? "";
 
-  // Målet är antalet dagar DU valt, inte ett härlett tal. Det är hela poängen:
-  // ett osynligt mål går inte att ifrågasätta.
-  const doneThisWeek = days.filter((d) => trainedThisWeek[d]).length;
-  const next = nextTrainingDay(days);
-  const trainedToday = trainedThisWeek[new Date().getDay()];
+  // Målet är dagarna DU planerat i kalendern, inte ett härlett tal. Det är
+  // hela poängen: ett osynligt mål går inte att ifrågasätta.
+  const today = toDayKey();
+  const doneThisWeek = trainedThisWeek.length;
+  const targetThisWeek = plannedThisWeek.length;
+  const daysUntilNext = next ? daysBetween(today, next) : null;
+  const trainedToday = trainedThisWeek.includes(today);
 
   const headline =
-    days.length === 0
-      ? "Välj dina\nträningsdagar"
-      : next === null
-        ? ""
-        : next.daysFromNow === 0
-          ? trainedToday
-            ? "Klart\nför idag"
-            : "Idag är en\nträningsdag"
-          : `Nästa pass\n${weekdayName(next.dow)}`;
+    next === null
+      ? "Inget planerat\nframåt"
+      : daysUntilNext === 0
+        ? trainedToday
+          ? "Klart\nför idag"
+          : "Idag är en\nträningsdag"
+        : daysUntilNext === 1
+          ? "Nästa pass\nimorgon"
+          : `Nästa pass\n${describeDay(next).split(" ")[0]}`;
 
   const sub =
-    days.length === 0
-      ? "Gå till Planera och välj vilka dagar du siktar på."
-      : `Du valde ${days
-          .slice()
-          .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
-          .map((d) => weekdayName(d).slice(0, 3).toLowerCase())
-          .join(", ")}.`;
+    next === null
+      ? "Gå till Planera och välj dagar i kalendern."
+      : daysUntilNext === 0
+        ? trainedToday
+          ? "Bra jobbat. Nästa gång enligt din plan."
+          : "Enligt din plan i kalendern."
+        : `${describeDay(next)} — om ${daysUntilNext} ${daysUntilNext === 1 ? "dag" : "dagar"}.`;
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
@@ -189,7 +198,9 @@ function StartSession({ onStarted }: { onStarted: () => void }) {
         </View>
 
         <View className="flex-row items-center" style={{ marginTop: 34, gap: 20 }}>
-          {days.length > 0 ? <WeekRing done={doneThisWeek} target={days.length} size={104} /> : null}
+          {targetThisWeek > 0 ? (
+            <WeekRing done={doneThisWeek} target={targetThisWeek} size={104} />
+          ) : null}
           <View className="flex-1">
             <Text style={{ fontSize: 24, fontWeight: "700", letterSpacing: -0.6, color: colors.ink }}>
               {headline}

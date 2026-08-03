@@ -654,20 +654,6 @@ async function main() {
   wclock = Date.parse(weekStart) + 9 * 3600_000;
   ok((await q.weekSummary(wstore, weekStart)).prevVolumeKg > 0, "förra veckans volym hittas");
 
-  console.log("Vanliga träningsdagar");
-  const usual = await q.usualWeekdays(wstore, new Date(wclock).toISOString());
-  eq(usual.length, 2, "två vanligaste dagarna returneras");
-  ok(usual.every((d) => d >= 0 && d <= 6), "veckodagarna ligger i intervallet 0–6");
-
-  const thin = new DatabaseSync(":memory:");
-  const tstore = { db: adapter(thin), uuid: randomUUID, now: () => new Date(wclock).toISOString() };
-  await core.initStore(tstore);
-  eq(
-    (await q.usualWeekdays(tstore, new Date(wclock).toISOString())).length,
-    0,
-    "tunt underlag ger inga 'vanliga dagar' — påstå inget datan inte bär",
-  );
-
   console.log("Nya rekord");
   const since = new Date(Date.parse(weekStart) - 86_400_000).toISOString();
   const pbs = await q.recentPbs(wstore, since);
@@ -708,62 +694,86 @@ async function main() {
     "plan utan avslutade pass saknar snittlängd",
   );
 
-  console.log("Träningsdagar");
-  eq((await q.getTrainingDays(wstore)).length, 0, "inga dagar valda från start");
-  await q.setTrainingDays(wstore, [1, 3, 5]);
+  console.log("Planerade dagar");
+  eq((await q.listPlannedDays(wstore, "2026-01-01", "2026-12-31")).length, 0, "inget planerat från start");
+
+  await q.setPlannedDay(wstore, "2026-08-06", true);
+  await q.setPlannedDay(wstore, "2026-08-04", true);
+  await q.setPlannedDay(wstore, "2026-08-08", true);
   eq(
-    (await q.getTrainingDays(wstore)).join(","),
-    "1,3,5",
-    "valda dagar sparas och läses tillbaka",
+    (await q.listPlannedDays(wstore, "2026-08-01", "2026-08-31")).join(","),
+    "2026-08-04,2026-08-06,2026-08-08",
+    "planerade dagar returneras i datumordning",
   );
-  await q.setTrainingDays(wstore, [5, 1, 1, 3, 9, -2]);
   eq(
-    (await q.getTrainingDays(wstore)).join(","),
-    "1,3,5",
-    "dubbletter och ogiltiga dagar rensas bort",
+    (await q.listPlannedDays(wstore, "2026-08-05", "2026-08-07")).join(","),
+    "2026-08-06",
+    "intervallet är inklusive i båda ändar",
   );
-  await q.setTrainingDays(wstore, []);
-  eq((await q.getTrainingDays(wstore)).length, 0, "går att nollställa");
-  await q.setTrainingDays(wstore, [1, 3, 5]);
 
-  eq(await q.getSetting(wstore, "finns-inte"), null, "okänd inställning ger null");
-  await q.setSetting(wstore, "temp", "a");
-  await q.setSetting(wstore, "temp", "b");
-  eq(await q.getSetting(wstore, "temp"), "b", "inställning skriver över sig själv");
-
-  console.log("Tränade dagar i veckan");
-  const perDay = await q.sessionsPerWeekday(wstore, weekStart);
-  eq(perDay.length, 7, "sju dagar returneras");
-  eq(perDay.filter(Boolean).length, 1, "bara måndagens avslutade pass är markerat");
-  eq(perDay[1], true, "måndag är markerad");
-
-  const open = await q.startSession(wstore, wgym);
-  await q.logSet(wstore, {
-    sessionId: open.id, exerciseId: barbell.id, machineId: null,
-    weightKg: 60, reps: 8, setIndex: 1,
-  });
+  await q.setPlannedDay(wstore, "2026-08-06", false);
   eq(
-    (await q.sessionsPerWeekday(wstore, weekStart)).filter(Boolean).length,
+    (await q.listPlannedDays(wstore, "2026-08-01", "2026-08-31")).join(","),
+    "2026-08-04,2026-08-08",
+    "avmarkerad dag försvinner",
+  );
+
+  // Unique-indexet på `day` gör att raden MÅSTE återanvändas, inte skapas om.
+  await q.setPlannedDay(wstore, "2026-08-06", true);
+  eq(
+    (await q.listPlannedDays(wstore, "2026-08-06", "2026-08-06")).length,
     1,
-    "ett PÅGÅENDE pass markerar ingen dag — dagen räknas när passet är klart",
+    "samma dag går att slå på igen efter att ha stängts av",
   );
-  await q.endSession(wstore, open.id, { feeling: null, notes: null });
+  const rowCount = wdb.prepare("SELECT COUNT(*) AS n FROM planned_day WHERE day = ?").get("2026-08-06");
+  eq(rowCount.n, 1, "ingen dubblettrad skapas när dagen slås på igen");
 
-  console.log("Nästa träningsdag");
-  // 2026-08-03 är en måndag.
-  const monday = new Date("2026-08-03T09:00:00.000Z");
-  eq(dates.nextTrainingDay([1, 3, 5], monday).daysFromNow, 0, "i dag är en träningsdag");
-  eq(dates.nextTrainingDay([3, 5], monday).dow, 3, "annars nästa valda dag framåt");
-  eq(dates.nextTrainingDay([3, 5], monday).daysFromNow, 2, "två dagar till onsdag");
-  eq(dates.nextTrainingDay([0], monday).daysFromNow, 6, "söndag ligger sex dagar bort");
-  eq(dates.nextTrainingDay([], monday), null, "utan valda dagar finns inget svar");
+  console.log("Nästa planerade dag");
+  eq(await q.nextPlannedDay(wstore, "2026-08-01"), "2026-08-04", "första planerade framåt hittas");
+  eq(await q.nextPlannedDay(wstore, "2026-08-04"), "2026-08-04", "i dag räknas som nästa");
+  eq(await q.nextPlannedDay(wstore, "2026-08-05"), "2026-08-06", "passerade dagar hoppas över");
+  eq(await q.nextPlannedDay(wstore, "2026-09-01"), null, "inget planerat framåt ger null");
+
+  console.log("Konvertering från veckodagar");
+  const conv = new DatabaseSync(":memory:");
+  const cstore = { db: adapter(conv), uuid: randomUUID, now: () => new Date(wclock).toISOString() };
+  await core.initStore(cstore);
   eq(
-    dates.nextTrainingDay([1], new Date("2026-08-04T09:00:00.000Z")).daysFromNow,
-    6,
-    "dagen efter en vald dag pekar på nästa vecka",
+    await q.migrateTrainingDaysToPlannedDays(cstore, "2026-08-03", 2),
+    0,
+    "utan gamla veckodagar görs ingenting",
+  );
+  await q.setSetting(cstore, "training_days", JSON.stringify([1, 4]));
+  eq(
+    await q.migrateTrainingDaysToPlannedDays(cstore, "2026-08-03", 2),
+    4,
+    "två veckodagar i två veckor blir fyra datum",
+  );
+  eq(
+    (await q.listPlannedDays(cstore, "2026-08-01", "2026-08-31")).join(","),
+    "2026-08-03,2026-08-06,2026-08-10,2026-08-13",
+    "rätt datum för måndagar och torsdagar",
+  );
+  eq(
+    await q.migrateTrainingDaysToPlannedDays(cstore, "2026-08-03", 2),
+    0,
+    "konverteringen körs bara en gång",
   );
 
-  console.log("");
+  console.log("Tränade dagar");
+  eq((await q.trainedDays(wstore, "2026-08-01", "2026-08-31")).length, 1, "en tränad dag i augusti");
+
+    console.log("Datumhjälpare");
+  eq(dates.toDayKey(new Date(2026, 7, 4)), "2026-08-04", "lokalt datum blir rätt nyckel");
+  eq(dates.daysBetween("2026-08-04", "2026-08-06"), 2, "dagar mellan datum räknas rätt");
+  eq(dates.daysBetween("2026-08-04", "2026-08-04"), 0, "samma dag ger noll");
+  const grid = dates.monthGrid(2026, 7); // augusti 2026 börjar en lördag
+  eq(grid.length % 7, 0, "rutnätet är jämnt delbart med sju");
+  eq(grid.filter(Boolean).length, 31, "augusti har 31 dagar");
+  eq(grid[0], null, "tomma rutor före den första");
+  eq(grid[5], "2026-08-01", "första augusti hamnar på lördagsplatsen");
+
+    console.log("");
   if (failures > 0) {
     console.error(`${failures} av ${checks} kontroller misslyckades`);
     process.exit(1);

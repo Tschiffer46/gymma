@@ -5,16 +5,18 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import {
   createRoutine,
-  getTrainingDays,
+  listPlannedDays,
   listRoutines,
-  setTrainingDays,
+  migrateTrainingDaysToPlannedDays,
+  setPlannedDay,
+  trainedDays,
   useStore,
-  usualWeekdays,
   type RoutineSummary,
 } from "@/lib/db";
+import { MonthCalendar } from "@/components/MonthCalendar";
 import { Button, Empty, Loading, SectionLabel } from "@/components/ui";
-import { WEEKDAYS_MONDAY_FIRST, weekdayName } from "@/lib/dates";
-import { colors, radius } from "@/lib/theme";
+import { describeDay, toDayKey } from "@/lib/dates";
+import { colors } from "@/lib/theme";
 
 /**
  * "Planera" — sparade ordningar av övningar.
@@ -28,8 +30,12 @@ export default function PlanScreen() {
   const router = useRouter();
 
   const [routines, setRoutines] = useState<RoutineSummary[]>([]);
-  const [days, setDays] = useState<number[]>([]);
-  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+  const [planned, setPlanned] = useState<Set<string>>(new Set());
+  const [trained, setTrained] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -37,28 +43,26 @@ export default function PlanScreen() {
 
   const load = useCallback(async () => {
     setRoutines(await listRoutines(store));
-    const chosen = await getTrainingDays(store);
-    setDays(chosen);
 
-    // Har du inte valt än: föreslå utifrån vad du faktiskt brukar göra. Det
-    // gör förstagångsvalet till ett tryck i stället för en fundering.
-    if (chosen.length === 0) {
-      const usual = await usualWeekdays(store, new Date().toISOString());
-      setSuggestion(
-        usual.length === 2
-          ? `Du brukar träna ${weekdayName(usual[0]).toLowerCase()} och ${weekdayName(usual[1]).toLowerCase()}.`
-          : null,
-      );
-    } else {
-      setSuggestion(null);
-    }
+    // Engångskonvertering av de gamla återkommande veckodagarna, så valet inte
+    // bara försvinner vid uppdateringen. Rör ingenting när kalendern används.
+    await migrateTrainingDaysToPlannedDays(store, toDayKey());
+
+    // Hämta ett brett intervall så månadsbyte inte kräver ett nytt anrop.
+    const from = `${month.year - 1}-01-01`;
+    const to = `${month.year + 1}-12-31`;
+    setPlanned(new Set(await listPlannedDays(store, from, to)));
+    setTrained(new Set(await trainedDays(store, from, to)));
     setLoading(false);
-  }, [store]);
+  }, [store, month.year]);
 
-  async function toggleDay(dow: number) {
-    const next = days.includes(dow) ? days.filter((d) => d !== dow) : [...days, dow];
-    setDays(next);
-    await setTrainingDays(store, next);
+  async function toggleDay(day: string) {
+    const next = new Set(planned);
+    const isPlanned = next.has(day);
+    if (isPlanned) next.delete(day);
+    else next.add(day);
+    setPlanned(next);
+    await setPlannedDay(store, day, !isPlanned);
   }
 
   useFocusEffect(
@@ -81,6 +85,9 @@ export default function PlanScreen() {
     }
   }
 
+  const today = toDayKey();
+  const nextPlanned = [...planned].filter((d) => d >= today).sort()[0] ?? null;
+
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["top", "left", "right"]}>
       <ScrollView
@@ -90,40 +97,24 @@ export default function PlanScreen() {
         <Text className="pb-1 pt-2 text-3xl font-bold tracking-tight text-ink">Planera</Text>
 
         {/* Träningsdagarna först: de svarar på NÄR, rutinerna på VAD. */}
-        <View className="mb-8 mt-4">
+        <View className="mb-9 mt-4">
           <SectionLabel>Vilka dagar tänker du träna?</SectionLabel>
-          <View className="mt-3 flex-row" style={{ gap: 6 }}>
-            {WEEKDAYS_MONDAY_FIRST.map(({ dow, short }) => {
-              const active = days.includes(dow);
-              return (
-                <Pressable
-                  key={dow}
-                  onPress={() => toggleDay(dow)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={short}
-                  className={`flex-1 items-center justify-center border active:opacity-70 ${
-                    active ? "border-accent bg-accent-soft" : "border-line"
-                  }`}
-                  style={{ height: 52, borderRadius: radius.sm }}
-                >
-                  <Text
-                    style={{
-                      fontSize: 12.5,
-                      fontWeight: "600",
-                      color: active ? colors.accent : colors.mutedDim,
-                    }}
-                  >
-                    {short}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <Text className="mt-2.5 text-[13px] leading-[18px] text-muted">
-            {days.length === 0
-              ? suggestion ?? "Välj dagarna du siktar på. Startskärmen visar sedan när nästa pass är."
-              : `${days.length} ${days.length === 1 ? "dag" : "dagar"} i veckan. Startskärmen räknar mot det.`}
+          <Text className="mb-4 mt-1.5 text-[13px] leading-[18px] text-muted">
+            Tryck på dagarna i kalendern. Passerade dagar går inte att planera — grönt är dagar
+            du faktiskt tränat.
+          </Text>
+          <MonthCalendar
+            year={month.year}
+            month={month.month}
+            planned={planned}
+            trained={trained}
+            onToggle={toggleDay}
+            onChangeMonth={(year, m) => setMonth({ year, month: m })}
+          />
+          <Text className="mt-4 text-[13px] leading-[18px] text-muted">
+            {nextPlanned
+              ? `Nästa planerade pass: ${describeDay(nextPlanned)}.`
+              : "Inget planerat framåt än. Startskärmen visar nästa dag när du valt någon."}
           </Text>
         </View>
 

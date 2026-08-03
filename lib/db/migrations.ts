@@ -170,4 +170,24 @@ export const MIGRATIONS: string[] = [
     deleted_at  TEXT
   );
   `,
+
+  // 6 — planerade träningsdagar som riktiga datum.
+  //
+  // Ersätter återkommande veckodagar (`app_setting['training_days']`). Skälet
+  // är att verkligheten inte upprepar sig: semester, resor och röda dagar gör
+  // "varje måndag" fel ungefär varannan vecka. Med datum planerar man den
+  // månad man faktiskt har framför sig.
+  //
+  // `day` är ett LOKALT kalenderdatum ('YYYY-MM-DD'), inte en tidpunkt. En
+  // träningsdag är en dag i kalendern, inte ett ögonblick i UTC.
+  `
+  CREATE TABLE planned_day (
+    id          TEXT PRIMARY KEY,
+    day         TEXT NOT NULL UNIQUE,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    deleted_at  TEXT
+  );
+  CREATE INDEX idx_planned_day ON planned_day(day);
+  `,
 ];

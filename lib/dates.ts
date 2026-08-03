@@ -38,6 +38,63 @@ export const WEEKDAYS_MONDAY_FIRST: { dow: number; short: string }[] = [
 ];
 
 /**
+ * Lokalt kalenderdatum som 'YYYY-MM-DD'.
+ *
+ * Medvetet INTE `toISOString().slice(0,10)` — den konverterar till UTC först,
+ * och en svensk sommarkväll klockan 23 blir då fel dag.
+ */
+export function toDayKey(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function dayKeyToDate(key: string): Date {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+const MONTHS = [
+  "januari", "februari", "mars", "april", "maj", "juni",
+  "juli", "augusti", "september", "oktober", "november", "december",
+];
+
+export function monthName(month: number): string {
+  return MONTHS[month] ?? "";
+}
+
+/**
+ * Rutnätet för en månad, måndag först.
+ *
+ * `null` = tom ruta före den första eller efter den sista i månaden, så att
+ * kolumnerna alltid står under rätt veckodag.
+ */
+export function monthGrid(year: number, month: number): (string | null)[] {
+  const first = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const leading = (first.getDay() + 6) % 7; // måndag = 0
+
+  const cells: (string | null)[] = new Array(leading).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(toDayKey(new Date(year, month, d)));
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+/** "torsdag 7 augusti" — för raden om nästa pass. */
+export function describeDay(key: string): string {
+  const d = dayKeyToDate(key);
+  return `${weekdayName(d.getDay()).toLowerCase()} ${d.getDate()} ${monthName(d.getMonth())}`;
+}
+
+/** Hela dagar mellan två kalenderdatum, oberoende av klockslag. */
+export function daysBetween(fromKey: string, toKey: string): number {
+  const a = dayKeyToDate(fromKey).getTime();
+  const b = dayKeyToDate(toKey).getTime();
+  return Math.round((b - a) / 86_400_000);
+}
+
+/**
  * Nästa dag du tänkt träna.
  *
  * `daysFromNow: 0` betyder att i dag är en träningsdag. Är listan tom finns

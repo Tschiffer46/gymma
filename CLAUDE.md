@@ -36,7 +36,7 @@ app/
 │   ├── _layout.tsx        Gymma / Följ upp / Planera / Inställningar
 │   ├── index.tsx          GYMMA — startvy (var + hur) eller pågående pass
 │   ├── insights.tsx       Följ upp — skal tills det finns data
-│   ├── plan.tsx           Planera — lista över rutiner
+│   ├── plan.tsx           Planera — kalender med träningsdagar + rutiner
 │   └── settings.tsx       Gym (namn, lägg till) + versionsmarkör
 ├── log/[exerciseId].tsx   LOGGVYN — appens hjärta
 ├── session/end.tsx        Avsluta pass: känsla + anteckning
@@ -45,11 +45,11 @@ app/
 ├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 └── exercise/[id].tsx      Redigera övning: namn, engelskt namn, viktenhet, steg
 components/  ui.tsx (Card/Button/Chip/Empty/Loading/SearchField) · ExerciseRow.tsx
-             · WeekRing.tsx (SVG) · FillBar.tsx · StartSheet.tsx
+             · WeekRing.tsx (SVG) · FillBar.tsx · StartSheet.tsx · MonthCalendar.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
 ├── format.ts   svenska tal ("2,5 kg"), volym i ton, "50 kg × 10, 10, 9", relativa datum
-├── dates.ts    veckostart (måndag), veckodagsnamn
+├── dates.ts    veckostart (måndag), datumnycklar, månadsrutnät
 ├── muscles.ts  muskelnycklar → svenska visningsnamn
 ├── release.ts  RELEASE — byggmarkören, BUMPA PER RELEASE
 └── db/
@@ -83,7 +83,8 @@ set_entry   id, session_id, machine_id?, exercise_id, weight_kg, reps, set_index
 routine     id, name
 routine_item id, routine_id, exercise_id, position
 session_skip id, session_id, exercise_id      -- överhoppat i ETT pass
-app_setting  key, value                        -- t.ex. training_days
+app_setting  key, value                        -- generell nyckel/värde
+planned_day  id, day ('YYYY-MM-DD', unikt)     -- planerade träningsdagar
 ```
 
 ### Kritiskt: övningsidentitet får aldrig splittras
@@ -117,21 +118,26 @@ Enheten visas alltid explicit i loggvyn (`12 kg/hantel`) — blandas konventione
 volymkurvan brus. Detta är ett tillägg utöver specen, som bara har `type` och därmed inte kan
 skilja hantlar från skivstång.
 
-### Träningsdagar: målet sätts, det härleds inte
-`app_setting['training_days']` håller veckodagarna du valt i Planera, som en JSON-array med
-`strftime('%w')`-nummer (0 = söndag).
+### Träningsdagar: riktiga datum, valda i en kalender
+`planned_day.day` är ett **lokalt kalenderdatum** ('YYYY-MM-DD'), inte en tidpunkt. Du väljer
+dem i månadskalendern i Planera.
 
-Startvyn räknade tidigare mot ett **härlett** veckomål (medianen av senaste sex veckorna).
-Det togs bort efter användartest 2026-08-03: "Två pass kvar den här veckan" utan att kunna se
-var tvåan kom ifrån är brus, och ett osynligt mål går inte att ifrågasätta. **Återinför inte
-`weeklyTarget()`.**
+Två beslut bakom det, båda efter användartest:
 
-Startvyn svarar nu på *när nästa pass är*, inte *hur många som återstår* — en plan i stället
-för ett betyg. Tom lista är ett giltigt tillstånd: då ber vyn dig välja i stället för att hitta
-på ett mål åt dig.
+1. **Målet härleds inte.** Startvyn räknade först mot medianen av senaste sex veckorna.
+   "Två pass kvar den här veckan" utan att kunna se var tvåan kom ifrån är brus — ett osynligt
+   mål går inte att ifrågasätta. **Återinför inte `weeklyTarget()`.**
+2. **Inte återkommande veckodagar heller.** Första försöket var `training_days` = [1,3,5].
+   Verkligheten upprepar sig inte: semester, resor och röda dagar gör "varje måndag" fel
+   ungefär varannan vecka. `migrateTrainingDaysToPlannedDays()` konverterar det gamla valet
+   till datum en gång, så ingen tappar sin inställning.
 
-`usualWeekdays()` finns kvar men har bytt roll: den föreslår dagar i Planera första gången,
-den styr ingenting.
+Startvyn svarar på *när nästa pass är*, inte *hur många som återstår* — en plan i stället för
+ett betyg. Inget planerat är ett giltigt läge: vyn ber dig planera i stället för att hitta på.
+
+**`'localtime'` är obligatoriskt** i all SQL som grupperar på datum. `ended_at` lagras i UTC,
+och ett pass som avslutas 00:30 svensk sommartid är 22:30 UTC dagen innan — utan modifieraren
+hamnar det på fel dag. Se `trainedDays()`.
 
 ### Rutiner är en sparad ordning, aldrig ett krav
 `routine` + `routine_item` (position 0,1,2…) och `session.routine_id`. Designprincip 4 gäller
@@ -336,9 +342,11 @@ telefonen. Testa den så här:
 - **Polering 2** ✅ Startvyn omritad (riktning 1b): veckoring (SVG), volym mot förra veckan,
   PB-rad, "Starta {plan}" med gymval + rutiner i ett bottenark. Nya aggregat: `weekSummary`,
   `usualWeekdays`, `recentPbs`, `sessionVolumeKg`, `lastUsedRoutine`, `averageSessionMinutes`.
-- **Träningsdagar** ✅ Det härledda veckomålet ersatt av dagar du väljer själv i Planera.
-  Startvyn visar nästa träningsdag. Volym och rekord flyttade till Följ upp, som därmed
-  slutade vara ett skal.
+- **Träningsdagar** ✅ Det härledda veckomålet ersatt av dagar du väljer själv. Volym och
+  rekord flyttade till Följ upp, som därmed slutade vara ett skal.
+- **Planeringskalender** ✅ Veckodagschippen ersatta av en månadskalender med riktiga datum
+  (`planned_day`). Startvyn visar nästa planerade dag. Rättade samtidigt en tidszonsbugg:
+  datumgruppering utan `'localtime'` la nattpass på fel dag.
 - **Nästa** — nästa-kort under passet (lätt version av 1c: tydligt kort överst, **utan** den
   ritade banan och den pulserande noden), sedan progression per maskin och träningsfrekvens
   i Följ upp. `react-native-svg` finns redan ⇒ OTA.
