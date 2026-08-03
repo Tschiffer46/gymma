@@ -42,7 +42,10 @@ function Gate() {
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
       <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="log/[exerciseId]" options={{ ...header, title: "" }} />
+      {/* Loggvyn ritar sin egen topprad (namn + setpips) och behöver hela
+          höjden till vikten — systemheadern hade ätit 44 pt och dubblerat
+          tillbakaknappen. */}
+      <Stack.Screen name="log/[exerciseId]" options={{ headerShown: false }} />
       <Stack.Screen name="session/end" options={{ ...header, title: "Avsluta pass" }} />
       <Stack.Screen name="routine/[id]" options={{ ...header, title: "Plan" }} />
       <Stack.Screen name="library" options={{ ...header, title: "Övningsbibliotek" }} />

@@ -149,6 +149,13 @@ man ett set utan öppet pass ska setet aldrig gå förlorat bara för att en kna
 - **Språk i UI: svenska.** Även kodkommentarer. Tal med decimalkomma (`fmtWeight`).
 - **Inga hårdkodade färger i ny UI** — använd `colors` från `lib/theme.ts` eller Tailwind-tokens
   (`bg-card`, `text-ink`, `border-line`, `bg-accent` …). De två hålls i synk manuellt.
+  `tint.accent` / `tint.ok` är tonade brickor och är avsiktligt `rgba` — de ligger ovanpå
+  olika underlag och ska släppa igenom dem.
+- **`radius` är en skala**, inte ett tal: `{ sm: 12, md: 16, lg: 18, xl: 20, pill: 9999 }`.
+  Skillnaden bär mening — en tryckyta i loggvyn (`xl`) ska kännas mjukare än ett listkort (`md`).
+- **Alla siffror som ändras ska vara tabulära** — `fontVariant: ["tabular-nums"]`. Utan det
+  hoppar vikten i sidled när man stegar 47,5 → 50, och det är precis den sortens skavank som
+  får appen att kännas oputsad.
 - **Minsta tryckyta:** `TAP` (64pt) för allt som trycks på under ett pass.
 - **`lib/db/core.ts` och `lib/db/queries.ts` får ALDRIG importera från expo eller react.**
   Det är vad som gör `npm run test:db` möjligt utan simulator. React-/expo-sidan bor i
@@ -303,6 +310,13 @@ telefonen. Testa den så här:
 - **Sprint 3.1** ✅ Engelska namn på alla övningar (matchas + söks), sök i passets lista, i
   planredigeraren och i biblioteket, hoppa över övning i planläget (`session_skip`, passspecifikt
   och överlever appomstart), samt övningsbibliotek i Inställningar med redigering och radering.
+- **Polering 1** ✅ Loggvyn omritad enligt `docs/design/gymma-polering-spec.md` (riktning 1d):
+  vikten 96 px och tabulär, setpips, cyklande viktstegsetikett i stället för tre chip,
+  PB-chip via `bestWeightOnMachine`, samt mikro-feedback (pop, pip-fyllning, toast).
+- **Polering 2–5** — startvyn (1b), pågående pass som bana (1c), celebration när planen är
+  klar, samt nivå & märken (1f). Specen ligger i `docs/design/`. **Obs:** 1f går emot
+  "Bygg inte detta → sociala funktioner/streaks" nedan; Thomas har ändrat det beslutet
+  medvetet, och listan ska uppdateras i samma PR som 1f byggs.
 - **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om

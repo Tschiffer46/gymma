@@ -484,6 +484,77 @@ async function main() {
   );
   await q.endSession(store, other.id, { feeling: null, notes: null });
 
+  console.log("Bästa vikt per maskin (PB)");
+  // exId är bröstpressen med maskinen `machineId` på gyms[0]. Där loggades
+  // 50, 50 och 55 kg tidigare i testet.
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: exId, machineId }),
+    55,
+    "tyngsta loggade vikten på maskinen hittas",
+  );
+
+  // Samma övning på ett ANNAT gym är en annan fysisk maskin med annan viktskala.
+  const otherMachine = await q.createMachine(store, {
+    gymId: gyms[1].id,
+    exerciseId: exId,
+    manufacturer: "Technogym",
+    weightStep: 5,
+  });
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: exId, machineId: otherMachine }),
+    null,
+    "PB räknas per maskin — en ny maskin startar utan rekord trots samma övning",
+  );
+
+  const pbSession = await q.startSession(store, gyms[1].id);
+  await q.logSet(store, {
+    sessionId: pbSession.id,
+    exerciseId: exId,
+    machineId: otherMachine,
+    weightKg: 30,
+    reps: 10,
+    setIndex: 1,
+  });
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: exId, machineId: otherMachine }),
+    30,
+    "den nya maskinen får sitt eget rekord",
+  );
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: exId, machineId }),
+    55,
+    "den andra maskinens rekord påverkas inte",
+  );
+
+  // Fria vikter saknar maskin — då jämförs inom övningen, men bara mot set utan maskin.
+  const freeEx = (await q.findExerciseByName(store, "Sidolyft")).id;
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: freeEx, machineId: null }),
+    null,
+    "övning utan loggade set saknar rekord",
+  );
+  await q.logSet(store, {
+    sessionId: pbSession.id,
+    exerciseId: freeEx,
+    machineId: null,
+    weightKg: 12.5,
+    reps: 12,
+    setIndex: 1,
+  });
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: freeEx, machineId: null }),
+    12.5,
+    "fri vikt får rekord på övningen",
+  );
+
+  await q.deleteSet(store, (await q.setsInSession(store, pbSession.id, freeEx))[0].id);
+  eq(
+    await q.bestWeightOnMachine(store, { exerciseId: freeEx, machineId: null }),
+    null,
+    "ångrat set räknas inte som rekord",
+  );
+  await q.endSession(store, pbSession.id, { feeling: null, notes: null });
+
   console.log("");
   if (failures > 0) {
     console.error(`${failures} av ${checks} kontroller misslyckades`);
