@@ -5,48 +5,49 @@ import { useFocusEffect } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import {
   getExercise,
-  listPlannedDays,
+  monthlyTotals,
   recentPbs,
-  trainedDays,
   useStore,
   weekSummary,
+  type MonthTotals,
 } from "@/lib/db";
 import { FillBar } from "@/components/FillBar";
-import { Card, Empty, Loading, SectionLabel } from "@/components/ui";
-import { WEEKDAYS_MONDAY_FIRST, addDaysIso, startOfWeekIso, toDayKey } from "@/lib/dates";
+import { Card, Empty, Loading, SectionLabel, StatTile } from "@/components/ui";
+import { addDaysIso, describeMonth, monthName, monthSpanDays, startOfWeekIso, toMonthKey } from "@/lib/dates";
 import { fmtVolume, fmtWeight } from "@/lib/format";
 import { colors, radius, tint } from "@/lib/theme";
 
 type Pb = { name: string; weightKg: number; deltaKg: number };
 
+/** Hur många månader bakåt snittet får bygga på. */
+const COMPARE_MONTHS = 6;
+
+const EMPTY_MONTH = (month: string): MonthTotals => ({ month, sessions: 0, volumeKg: 0, sets: 0 });
+
 /**
- * "Följ upp" — hur veckan gick.
+ * "Följ upp" — hur månaden går, och hur veckan ligger till.
  *
- * Volymen och rekorden låg tidigare på startskärmen, där de konkurrerade med
- * det man faktiskt kom för att göra. De hör hemma här: startskärmen är till för
- * att komma igång, den här fliken för att se tillbaka.
+ * Månaden är rätt tidsfönster för "blir det gjort": en dålig vecka säger
+ * ingenting, en dålig månad säger något. Veckan finns kvar längst ned för att
+ * svara på tempot just nu.
  */
 export default function InsightsScreen() {
   const store = useStore();
 
   const [week, setWeek] = useState({ sessions: 0, volumeKg: 0, prevVolumeKg: 0 });
-  const [weekDays, setWeekDays] = useState<string[]>([]);
-  const [trained, setTrained] = useState<Set<string>>(new Set());
-  const [planned, setPlanned] = useState<Set<string>>(new Set());
+  const [months, setMonths] = useState<MonthTotals[]>([]);
+  const [monthKey, setMonthKey] = useState(() => toMonthKey());
   const [pbs, setPbs] = useState<Pb[]>([]);
   const [loading, setLoading] = useState(true);
   const [focusKey, setFocusKey] = useState(0);
 
   const load = useCallback(async () => {
-    const weekStart = startOfWeekIso();
-    setWeek(await weekSummary(store, weekStart));
-    // Veckans sju datum, så raden kan visa både planerat och utfört per dag.
-    const keys = Array.from({ length: 7 }, (_, i) =>
-      toDayKey(new Date(Date.parse(addDaysIso(weekStart, i)))),
-    );
-    setWeekDays(keys);
-    setTrained(new Set(await trainedDays(store, keys[0], keys[6])));
-    setPlanned(new Set(await listPlannedDays(store, keys[0], keys[6])));
+    setWeek(await weekSummary(store, startOfWeekIso()));
+
+    const now = new Date();
+    const span = monthSpanDays(now.getFullYear(), now.getMonth(), COMPARE_MONTHS);
+    setMonths(await monthlyTotals(store, span.from, span.to));
+    setMonthKey(toMonthKey(now));
 
     const found = await recentPbs(store, addDaysIso(new Date().toISOString(), -14));
     const named: Pb[] = [];
@@ -69,7 +70,30 @@ export default function InsightsScreen() {
 
   if (loading) return <Loading />;
 
-  const today = toDayKey();
+  const current = months.find((m) => m.month === monthKey) ?? EMPTY_MONTH(monthKey);
+  // Bara månader som faktiskt har pass räknas in i snittet. Att dividera med
+  // sex när appen funnits i två hade gjort varje jämförelse till en glädjekalkyl.
+  const prior = months.filter((m) => m.month !== monthKey);
+
+  const perSession = (m: MonthTotals) => (m.sessions > 0 ? m.volumeKg / m.sessions : 0);
+  const avg = (pick: (m: MonthTotals) => number) =>
+    prior.length === 0 ? null : prior.reduce((sum, m) => sum + pick(m), 0) / prior.length;
+
+  const basis =
+    prior.length === 1 ? describeMonth(prior[0].month) : `snittet av ${prior.length} mån`;
+
+  /** Jämförelsetexten under en bricka — utelämnas när underlaget saknas. */
+  function versus(value: number, average: number | null) {
+    if (average === null || average <= 0) return {};
+    const share = value / average;
+    const pct = Math.round(Math.abs(share - 1) * 100);
+    if (pct === 0) return { note: `Som ${basis}`, tone: "neutral" as const };
+    return {
+      note: `${share >= 1 ? "+" : "−"}${pct} % mot ${basis}`,
+      tone: share >= 1 ? ("up" as const) : ("down" as const),
+    };
+  }
+
   const hasPrev = week.prevVolumeKg > 0;
   const volumeShare = hasPrev ? week.volumeKg / week.prevVolumeKg : week.volumeKg > 0 ? 1 : 0;
   const volumeNote = hasPrev
@@ -81,50 +105,34 @@ export default function InsightsScreen() {
       <ScrollView contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 28 }}>
         <Text className="pb-6 pt-2 text-3xl font-bold tracking-tight text-ink">Följ upp</Text>
 
-        <SectionLabel>Den här veckan</SectionLabel>
-        <View className="mt-3 flex-row" style={{ gap: 6 }}>
-          {WEEKDAYS_MONDAY_FIRST.map(({ dow, short }, i) => {
-            const day = weekDays[i] ?? "";
-            const didTrain = trained.has(day);
-            const isPlanned = planned.has(day);
-            const isToday = day === today;
-            return (
-              <View key={dow} className="flex-1 items-center">
-                <View
-                  className="w-full items-center justify-center"
-                  style={{
-                    height: 46,
-                    borderRadius: radius.sm,
-                    backgroundColor: didTrain ? colors.ok : isToday ? colors.accentSoft : colors.card,
-                    borderWidth: isToday && !didTrain ? 2 : isPlanned && !didTrain ? 1 : 0,
-                    borderColor: isToday ? colors.accent : colors.line,
-                  }}
-                >
-                  {didTrain ? <Feather name="check" size={17} color={colors.bg} /> : null}
-                </View>
-                <Text
-                  style={{
-                    fontSize: 11,
-                    fontWeight: "600",
-                    marginTop: 6,
-                    color: isToday ? colors.accent : didTrain ? colors.muted : colors.mutedDim,
-                  }}
-                >
-                  {short}
-                </Text>
-              </View>
-            );
-          })}
+        <SectionLabel>I {monthName(new Date().getMonth())}</SectionLabel>
+        <View className="mt-3 gap-2.5">
+          <View className="flex-row gap-2.5">
+            <StatTile label="Pass" value={String(current.sessions)} {...versus(current.sessions, avg((m) => m.sessions))} />
+            <StatTile
+              label="Flyttat"
+              value={fmtVolume(current.volumeKg)}
+              {...versus(current.volumeKg, avg((m) => m.volumeKg))}
+            />
+          </View>
+          <View className="flex-row gap-2.5">
+            <StatTile label="Set" value={String(current.sets)} {...versus(current.sets, avg((m) => m.sets))} />
+            <StatTile
+              label="Per pass"
+              value={current.sessions > 0 ? fmtVolume(perSession(current)) : "—"}
+              {...versus(perSession(current), avg(perSession))}
+            />
+          </View>
         </View>
-        <Text style={{ fontSize: 12.5, color: colors.mutedDim, marginTop: 10 }}>
-          {planned.size > 0
-            ? `${trained.size} av ${planned.size} planerade pass avklarade.`
-            : `${week.sessions} pass den här veckan. Planera dagar i Planera-fliken.`}
+        <Text style={{ fontSize: 12.5, color: colors.mutedDim, marginTop: 10, lineHeight: 17 }}>
+          {prior.length === 0
+            ? "Första månaden med data. Jämförelsen dyker upp när det finns en månad att mäta mot."
+            : `Jämfört med ${basis} — bara månader du faktiskt tränat räknas in.`}
         </Text>
 
         <View style={{ marginTop: 32 }}>
           <View className="flex-row items-center justify-between" style={{ marginBottom: 10 }}>
-            <SectionLabel>Volym</SectionLabel>
+            <SectionLabel>Den här veckan</SectionLabel>
             <Text
               style={{
                 fontSize: 15,

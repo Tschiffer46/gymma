@@ -763,6 +763,105 @@ async function main() {
   console.log("Tränade dagar");
   eq((await q.trainedDays(wstore, "2026-08-01", "2026-08-31")).length, 1, "en tränad dag i augusti");
 
+  console.log("Pass per planerad dag");
+  // Planerade dagar just nu: 2026-08-04, -06 och -08. `wroutine` = "Överkropp".
+  eq(
+    await q.plannedRoutineForDay(wstore, "2026-08-06"),
+    null,
+    "planerad dag utan valt pass ger null — dagen behöver inget pass",
+  );
+
+  await q.setPlannedDayRoutine(wstore, "2026-08-06", wroutine);
+  const dayPlan = await q.plannedRoutineForDay(wstore, "2026-08-06");
+  eq(dayPlan.name, "Överkropp", "valt pass hittas för dagen");
+  eq(dayPlan.itemCount, 1, "antal övningar följer med");
+  eq(
+    await q.plannedRoutineForDay(wstore, "2026-08-04"),
+    null,
+    "valet gäller bara den dag det sattes",
+  );
+
+  const plans = await q.listPlannedDayPlans(wstore, "2026-08-01", "2026-08-31");
+  eq(plans.length, 3, "alla planerade dagar kommer med, med eller utan pass");
+  eq(plans.find((p) => p.day === "2026-08-06").routineName, "Överkropp", "passets namn följer med");
+  eq(plans.find((p) => p.day === "2026-08-04").routineId, null, "dag utan pass har null");
+
+  // Att välja pass för en dag som inte var planerad ska planera den.
+  await q.setPlannedDayRoutine(wstore, "2026-08-20", wroutine);
+  ok(
+    (await q.listPlannedDays(wstore, "2026-08-20", "2026-08-20")).length === 1,
+    "att välja pass planerar dagen",
+  );
+  await q.setPlannedDayRoutine(wstore, "2026-08-20", null);
+  eq(await q.plannedRoutineForDay(wstore, "2026-08-20"), null, "passet går att ta bort");
+  eq(
+    (await q.listPlannedDays(wstore, "2026-08-20", "2026-08-20")).length,
+    1,
+    "dagen är kvar när bara passet tas bort",
+  );
+
+  // Avplanerad dag ska glömma sitt pass — annars kommer det tyst tillbaka.
+  await q.setPlannedDay(wstore, "2026-08-06", false);
+  await q.setPlannedDay(wstore, "2026-08-06", true);
+  eq(
+    await q.plannedRoutineForDay(wstore, "2026-08-06"),
+    null,
+    "avplanerad och återplanerad dag är tom igen",
+  );
+
+  // En raderad plan får aldrig bli en dinglande referens.
+  const doomed = await q.createRoutine(wstore, "Tas bort");
+  await q.setPlannedDayRoutine(wstore, "2026-08-08", doomed);
+  ok(await q.plannedRoutineForDay(wstore, "2026-08-08"), "passet är valt innan planen raderas");
+  await q.deleteRoutine(wstore, doomed);
+  eq(
+    await q.plannedRoutineForDay(wstore, "2026-08-08"),
+    null,
+    "raderad plan gör dagen passlös i stället för trasig",
+  );
+  eq(
+    (await q.listPlannedDayPlans(wstore, "2026-08-08", "2026-08-08"))[0].routineId,
+    null,
+    "listan visar ingen dinglande referens",
+  );
+
+  console.log("Vanligaste gym och planer");
+  const topGyms = await q.listTopGyms(wstore, 3);
+  eq(topGyms[0].name, "Hemmagym", "gymmet med flest pass ligger först");
+  eq(topGyms[0].sessions, 18, "antal pass räknas per gym");
+  eq(topGyms[1].sessions, 0, "gym utan pass hamnar sist men är kvar");
+  eq((await q.listTopGyms(wstore, 1)).length, 1, "gränsen respekteras");
+
+  await q.createRoutine(wstore, "Ben");
+  const topRoutines = await q.listTopRoutines(wstore, 3);
+  eq(topRoutines[0].name, "Överkropp", "planen med flest pass ligger först");
+  eq(topRoutines[0].sessions, 1, "antal pass räknas per plan");
+  eq(topRoutines[0].itemCount, 1, "antal övningar följer med");
+  eq(topRoutines[1].name, "Ben", "nyskapad plan utan pass är med men sist");
+  eq(topRoutines[1].sessions, 0, "en oanvänd plan har noll pass");
+
+  console.log("Månadssummor");
+  const months = await q.monthlyTotals(wstore, "2026-01-01", "2026-12-31");
+  eq(months.length, 2, "bara månader med avslutade pass finns med");
+  eq(months[0].month, "2026-07", "månaderna kommer i ordning");
+  eq(months[0].sessions, 16, "juli har sexton pass");
+  eq(months[0].volumeKg, 12800, "julis volym summeras");
+  eq(months[0].sets, 16, "antal set räknas");
+  eq(months[1].month, "2026-08", "augusti är den andra månaden");
+  eq(months[1].sessions, 2, "augusti har två pass");
+  eq(months[1].volumeKg, 1920, "hantlar räknas dubbelt även i månadssumman");
+  eq(months[1].sets, 3, "tre set i augusti");
+  eq(
+    (await q.monthlyTotals(wstore, "2026-08-01", "2026-08-31")).length,
+    1,
+    "intervallet begränsar vilka månader som räknas",
+  );
+  eq(
+    (await q.monthlyTotals(wstore, "2025-01-01", "2025-12-31")).length,
+    0,
+    "en period utan pass ger inga rader alls — inget snitt att dela med noll",
+  );
+
     console.log("Datumhjälpare");
   eq(dates.toDayKey(new Date(2026, 7, 4)), "2026-08-04", "lokalt datum blir rätt nyckel");
   eq(dates.daysBetween("2026-08-04", "2026-08-06"), 2, "dagar mellan datum räknas rätt");
@@ -772,6 +871,16 @@ async function main() {
   eq(grid.filter(Boolean).length, 31, "augusti har 31 dagar");
   eq(grid[0], null, "tomma rutor före den första");
   eq(grid[5], "2026-08-01", "första augusti hamnar på lördagsplatsen");
+  eq(dates.toMonthKey(new Date(2026, 7, 4)), "2026-08", "månadsnyckeln blir rätt");
+  eq(dates.describeMonth("2026-08"), "augusti 2026", "månaden beskrivs på svenska");
+  // Augusti plus de sex föregående månaderna = februari–augusti.
+  const span = dates.monthSpanDays(2026, 7, 6);
+  eq(span.from, "2026-02-01", "sex månader bakåt från augusti börjar i februari");
+  eq(span.to, "2026-08-31", "spannet slutar sista dagen i augusti");
+  eq(dates.monthSpanDays(2026, 1, 0).to, "2026-02-28", "februari 2026 slutar den 28:e");
+  eq(dates.monthSpanDays(2026, 0, 1).from, "2025-12-01", "spannet klarar årsskiftet");
+  eq(dates.greeting(new Date(2026, 7, 4, 7)), "God morgon", "morgonhälsning före tio");
+  eq(dates.greeting(new Date(2026, 7, 4, 20)), "God kväll", "kvällshälsning efter arton");
 
     console.log("");
   if (failures > 0) {

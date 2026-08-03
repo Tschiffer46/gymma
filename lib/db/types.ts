@@ -89,6 +89,34 @@ export type Routine = Timestamps & {
 /** Rutin med antal övningar — det listvyn behöver. */
 export type RoutineSummary = Routine & { itemCount: number };
 
+/** Rutin med hur många pass som faktiskt kört den — sorterar snabbstarten. */
+export type RoutineUsage = RoutineSummary & { sessions: number };
+
+/** Gym med hur många pass som körts där — sorterar snabbstarten. */
+export type GymUsage = Gym & { sessions: number };
+
+/**
+ * En planerad dag och passet som är tänkt den dagen.
+ *
+ * `routineId` är nullbar med flit: en dag utan pass är ett fullgott läge.
+ * Designprincip 4 säger att programmet växer fram — att välja dag ska aldrig
+ * tvinga fram ett beslut om vad man ska köra.
+ */
+export type PlannedDayPlan = {
+  day: string;
+  routineId: string | null;
+  routineName: string | null;
+};
+
+/** Summering av en månad. Månader helt utan avslutade pass saknas i listan. */
+export type MonthTotals = {
+  /** 'YYYY-MM', lokal tid. */
+  month: string;
+  sessions: number;
+  volumeKg: number;
+  sets: number;
+};
+
 export type RoutineItem = {
   id: string;
   position: number;

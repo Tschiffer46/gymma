@@ -104,6 +104,55 @@ export function Chip({
 }
 
 /**
+ * En siffra som betyder något, med sin jämförelse under.
+ *
+ * `note` får bara stå där när jämförelsen faktiskt går att göra. Ton B: positiv
+ * återkoppling ska påstå det som är sant ur datan, och "+40 %" mot ett snitt som
+ * bara bygger på en halv månad vore en glädjekalkyl.
+ */
+export function StatTile({
+  label,
+  value,
+  note,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  note?: string;
+  tone?: "up" | "down" | "neutral";
+}) {
+  const noteColor = tone === "up" ? colors.ok : tone === "down" ? colors.muted : colors.mutedDim;
+
+  return (
+    <View
+      className="flex-1 rounded-[16px] border border-line bg-card"
+      style={{ paddingHorizontal: 14, paddingVertical: 13, minHeight: 92 }}
+    >
+      <Text className="text-[11px] font-semibold uppercase tracking-widest text-muted">
+        {label}
+      </Text>
+      <Text
+        className="text-ink"
+        style={{
+          fontSize: 26,
+          fontWeight: "700",
+          letterSpacing: -0.6,
+          marginTop: 6,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {value}
+      </Text>
+      {note ? (
+        <Text style={{ fontSize: 11.5, color: noteColor, marginTop: 4 }} numberOfLines={2}>
+          {note}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
  * Den stora +/–-raden. Enda sättet att ändra vikt och reps under ett pass —
  * appen öppnar aldrig tangentbordet mellan set (designprincip 2).
  *

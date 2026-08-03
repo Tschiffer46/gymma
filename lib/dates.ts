@@ -81,6 +81,50 @@ export function monthGrid(year: number, month: number): (string | null)[] {
   return cells;
 }
 
+/** 'YYYY-MM' i lokal tid — nyckeln `monthlyTotals` grupperar på. */
+export function toMonthKey(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * Första och sista kalenderdagen i ett spann av månader, inklusive båda.
+ *
+ * `monthsBack: 0` ger den aktuella månaden. `new Date(year, month + 1, 0)` är
+ * sista dagen i månaden — dag 0 i nästa månad, vilket också hanterar skottår.
+ */
+export function monthSpanDays(
+  year: number,
+  month: number,
+  monthsBack = 0,
+): { from: string; to: string } {
+  return {
+    from: toDayKey(new Date(year, month - monthsBack, 1)),
+    to: toDayKey(new Date(year, month + 1, 0)),
+  };
+}
+
+/** "augusti 2026" — rubriken över månadsbrickorna. */
+export function describeMonth(monthKey: string): string {
+  const [y, m] = monthKey.split("-").map(Number);
+  return `${monthName(m - 1)} ${y}`;
+}
+
+/**
+ * Tidsanpassad hälsning.
+ *
+ * Ton B: en hälsning, ingen coach. "Dags att bli starkare" hade sagt samma sak
+ * varje dag och låtit som en tränare — det här känns i stället som att appen
+ * vet vilken tid på dygnet du öppnade den.
+ */
+export function greeting(d: Date = new Date()): string {
+  const h = d.getHours();
+  if (h < 5) return "God natt";
+  if (h < 10) return "God morgon";
+  if (h < 13) return "God förmiddag";
+  if (h < 18) return "God eftermiddag";
+  return "God kväll";
+}
+
 /** "torsdag 7 augusti" — för raden om nästa pass. */
 export function describeDay(key: string): string {
   const d = dayKeyToDate(key);
@@ -92,26 +136,4 @@ export function daysBetween(fromKey: string, toKey: string): number {
   const a = dayKeyToDate(fromKey).getTime();
   const b = dayKeyToDate(toKey).getTime();
   return Math.round((b - a) / 86_400_000);
-}
-
-/**
- * Nästa dag du tänkt träna.
- *
- * `daysFromNow: 0` betyder att i dag är en träningsdag. Är listan tom finns
- * inget att svara — då säger startvyn i stället att dagarna inte är valda ännu.
- *
- * Ren funktion utan databasberoende, så den kan testas direkt.
- */
-export function nextTrainingDay(
-  days: number[],
-  from: Date = new Date(),
-): { dow: number; daysFromNow: number } | null {
-  if (days.length === 0) return null;
-
-  const today = from.getDay();
-  for (let ahead = 0; ahead < 7; ahead++) {
-    const dow = (today + ahead) % 7;
-    if (days.includes(dow)) return { dow, daysFromNow: ahead };
-  }
-  return null;
 }

@@ -190,4 +190,17 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_planned_day ON planned_day(day);
   `,
+
+  // 7 — vilket pass som är tänkt en planerad dag.
+  //
+  // Nullbar med flit: en planerad dag UTAN plan är ett fullgott läge. Att välja
+  // dag ska aldrig tvinga fram ett beslut om vad man ska köra — designprincip 4
+  // säger att programmet växer fram, inte att det bestäms i förväg.
+  //
+  // Ingen ON DELETE-klausul: allt raderas mjukt här, så en borttagen rutin
+  // ligger kvar som rad. Läsningen joinar på `deleted_at IS NULL` och får då
+  // tillbaka en dag utan pass — precis rätt beteende.
+  `
+  ALTER TABLE planned_day ADD COLUMN routine_id TEXT REFERENCES routine(id);
+  `,
 ];

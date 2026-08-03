@@ -8,11 +8,15 @@ import type {
   ExerciseType,
   Feeling,
   Gym,
+  GymUsage,
   Machine,
+  MonthTotals,
   PastPerformance,
+  PlannedDayPlan,
   Routine,
   RoutineDetail,
   RoutineSummary,
+  RoutineUsage,
   Session,
   SetEntry,
   WeightUnit,
@@ -177,6 +181,29 @@ export async function listGymsByRecentUse({ db }: Store): Promise<(Gym & { lastU
     [],
   );
   return rows.map((r) => ({ ...toGym(r), lastUsedAt: r.last_at }));
+}
+
+/**
+ * De gym du tränar på oftast — snabbstartens första rad.
+ *
+ * "Vanligast" är antal pass, inte senast använd: har du ett hemmagym och ett
+ * på jobbet ska båda ligga kvar även den vecka du provat ett tredje. Vid lika
+ * antal vinner det senast använda, och nya gym utan pass hamnar sist.
+ */
+export async function listTopGyms({ db }: Store, limit = 3): Promise<GymUsage[]> {
+  const rows = await db.getAllAsync<GymRow & { n: number; last_at: string | null }>(
+    `SELECT g.*,
+            (SELECT COUNT(*) FROM session s
+             WHERE s.gym_id = g.id AND s.deleted_at IS NULL) AS n,
+            (SELECT MAX(s.started_at) FROM session s
+             WHERE s.gym_id = g.id AND s.deleted_at IS NULL) AS last_at
+     FROM gym g
+     WHERE g.deleted_at IS NULL
+     ORDER BY n DESC, (last_at IS NULL) ASC, last_at DESC, g.created_at ASC
+     LIMIT ?`,
+    [limit],
+  );
+  return rows.map((r) => ({ ...toGym(r), sessions: r.n }));
 }
 
 export async function setActiveGym({ db, now }: Store, gymId: string): Promise<void> {
@@ -890,6 +917,39 @@ export async function weekSummary(
   };
 }
 
+/**
+ * Månad för månad: pass, volym och antal set. Driver brickorna i Följ upp.
+ *
+ * Månader helt utan avslutade pass finns INTE med i svaret, och det är med
+ * flit. Snittet ska räknas över de månader du faktiskt tränat — dividerar man
+ * med sex när appen bara funnits i två blir jämförelsen en glädjekalkyl, och
+ * positiv återkoppling får bara påstå det som är sant ur datan.
+ *
+ * `'localtime'` är obligatoriskt: `ended_at` ligger i UTC, och ett pass som
+ * avslutas 00:30 den första i månaden skulle annars hamna i föregående månad.
+ */
+export async function monthlyTotals(
+  { db }: Store,
+  fromDay: string,
+  toDay: string,
+): Promise<MonthTotals[]> {
+  const rows = await db.getAllAsync<{ month: string; n: number; v: number | null; s: number }>(
+    `SELECT strftime('%Y-%m', s.ended_at, 'localtime') AS month,
+            COUNT(DISTINCT s.id) AS n,
+            ${VOLUME_SUM} AS v,
+            COUNT(se.id) AS s
+     FROM session s
+     LEFT JOIN set_entry se ON se.session_id = s.id AND se.deleted_at IS NULL
+     LEFT JOIN exercise e ON e.id = se.exercise_id
+     WHERE s.deleted_at IS NULL AND s.ended_at IS NOT NULL
+       AND date(s.ended_at, 'localtime') >= ? AND date(s.ended_at, 'localtime') <= ?
+     GROUP BY month
+     ORDER BY month ASC`,
+    [fromDay, toDay],
+  );
+  return rows.map((r) => ({ month: r.month, sessions: r.n, volumeKg: r.v ?? 0, sets: r.s }));
+}
+
 /** Volymen i ett enskilt pass — samma formel, filtrerad på passet. */
 export async function sessionVolumeKg({ db }: Store, sessionId: string): Promise<number> {
   const row = await db.getFirstAsync<{ v: number | null }>(
@@ -949,10 +1009,41 @@ export async function listPlannedDays(
 }
 
 /**
+ * Dagarna du planerat i ett intervall, med passet som är tänkt varje dag.
+ *
+ * En raderad rutin ger `routineId: null` i stället för en dinglande referens —
+ * joinen filtrerar på `deleted_at IS NULL` och dagen blir då helt enkelt en
+ * planerad dag utan pass, vilket är ett fullgott läge.
+ */
+export async function listPlannedDayPlans(
+  { db }: Store,
+  fromDay: string,
+  toDay: string,
+): Promise<PlannedDayPlan[]> {
+  const rows = await db.getAllAsync<{ day: string; routine_id: string | null; name: string | null }>(
+    `SELECT p.day, p.routine_id, r.name
+     FROM planned_day p
+     LEFT JOIN routine r ON r.id = p.routine_id AND r.deleted_at IS NULL
+     WHERE p.deleted_at IS NULL AND p.day >= ? AND p.day <= ?
+     ORDER BY p.day ASC`,
+    [fromDay, toDay],
+  );
+  return rows.map((r) => ({
+    day: r.day,
+    routineId: r.name === null ? null : r.routine_id,
+    routineName: r.name,
+  }));
+}
+
+/**
  * Slår på eller av en planerad dag.
  *
  * Raden återanvänds i stället för att skapas på nytt — annars skulle
  * unique-indexet på `day` krocka med en tidigare mjukt raderad rad.
+ *
+ * Att avplanera en dag nollställer också passet. Väljer man dagen igen ska den
+ * vara tom: ett pass man tagit bort ur kalendern och sedan lagt tillbaka ska
+ * inte tyst komma med gammalt innehåll.
  */
 export async function setPlannedDay(
   { db, uuid, now }: Store,
@@ -966,11 +1057,17 @@ export async function setPlannedDay(
   );
 
   if (existing) {
-    await db.runAsync("UPDATE planned_day SET deleted_at = ?, updated_at = ? WHERE id = ?", [
-      planned ? null : t,
-      t,
-      existing.id,
-    ]);
+    if (planned) {
+      await db.runAsync(
+        "UPDATE planned_day SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+        [t, existing.id],
+      );
+    } else {
+      await db.runAsync(
+        "UPDATE planned_day SET deleted_at = ?, routine_id = NULL, updated_at = ? WHERE id = ?",
+        [t, t, existing.id],
+      );
+    }
     return;
   }
   if (!planned) return;
@@ -979,6 +1076,46 @@ export async function setPlannedDay(
     "INSERT INTO planned_day (id, day, created_at, updated_at) VALUES (?, ?, ?, ?)",
     [uuid(), day, t, t],
   );
+}
+
+/**
+ * Väljer vilket pass som är tänkt en viss dag. `null` tar bort valet men
+ * behåller dagen.
+ *
+ * Att välja pass innebär att dagen är planerad — annars skulle valet peka på en
+ * dag som inte finns i kalendern.
+ */
+export async function setPlannedDayRoutine(
+  store: Store,
+  day: string,
+  routineId: string | null,
+): Promise<void> {
+  const { db, now } = store;
+  if (routineId) await setPlannedDay(store, day, true);
+  await db.runAsync("UPDATE planned_day SET routine_id = ?, updated_at = ? WHERE day = ?", [
+    routineId,
+    now(),
+    day,
+  ]);
+}
+
+/**
+ * Passet som är tänkt en viss dag — startvyns "kör enligt planen".
+ *
+ * Null betyder att dagen antingen inte är planerad eller är planerad utan
+ * valt pass. Startvyn faller då tillbaka på snabbstarten.
+ */
+export async function plannedRoutineForDay({ db }: Store, day: string): Promise<RoutineSummary | null> {
+  const row = await db.getFirstAsync<RoutineRow & { n: number }>(
+    `SELECT r.*,
+            (SELECT COUNT(*) FROM routine_item i
+             WHERE i.routine_id = r.id AND i.deleted_at IS NULL) AS n
+     FROM planned_day p
+     JOIN routine r ON r.id = p.routine_id AND r.deleted_at IS NULL
+     WHERE p.deleted_at IS NULL AND p.day = ?`,
+    [day],
+  );
+  return row ? { ...toRoutine(row), itemCount: row.n } : null;
 }
 
 /**
@@ -1154,6 +1291,31 @@ export async function listRoutines({ db }: Store): Promise<RoutineSummary[]> {
     [],
   );
   return rows.map((r) => ({ ...toRoutine(r), itemCount: r.n }));
+}
+
+/**
+ * De planer du kör oftast — snabbstartens andra rad.
+ *
+ * Samma sortering som gymmen: antal pass först, senast körd som utslag. En
+ * nyskapad plan har noll pass och hamnar sist, men går alltid att nå via
+ * bottenarket — snabbstarten är en genväg, inte hela urvalet.
+ */
+export async function listTopRoutines({ db }: Store, limit = 3): Promise<RoutineUsage[]> {
+  const rows = await db.getAllAsync<RoutineRow & { items: number; n: number; last_at: string | null }>(
+    `SELECT r.*,
+            (SELECT COUNT(*) FROM routine_item i
+             WHERE i.routine_id = r.id AND i.deleted_at IS NULL) AS items,
+            (SELECT COUNT(*) FROM session s
+             WHERE s.routine_id = r.id AND s.deleted_at IS NULL) AS n,
+            (SELECT MAX(s.started_at) FROM session s
+             WHERE s.routine_id = r.id AND s.deleted_at IS NULL) AS last_at
+     FROM routine r
+     WHERE r.deleted_at IS NULL
+     ORDER BY n DESC, (last_at IS NULL) ASC, last_at DESC, r.created_at ASC
+     LIMIT ?`,
+    [limit],
+  );
+  return rows.map((r) => ({ ...toRoutine(r), itemCount: r.items, sessions: r.n }));
 }
 
 export async function createRoutine({ db, uuid, now }: Store, name: string): Promise<string> {
