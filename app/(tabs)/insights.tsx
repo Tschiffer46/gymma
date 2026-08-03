@@ -5,15 +5,15 @@ import { useFocusEffect } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import {
   getExercise,
-  getTrainingDays,
+  listPlannedDays,
   recentPbs,
-  sessionsPerWeekday,
+  trainedDays,
   useStore,
   weekSummary,
 } from "@/lib/db";
 import { FillBar } from "@/components/FillBar";
 import { Card, Empty, Loading, SectionLabel } from "@/components/ui";
-import { WEEKDAYS_MONDAY_FIRST, addDaysIso, startOfWeekIso } from "@/lib/dates";
+import { WEEKDAYS_MONDAY_FIRST, addDaysIso, startOfWeekIso, toDayKey } from "@/lib/dates";
 import { fmtVolume, fmtWeight } from "@/lib/format";
 import { colors, radius, tint } from "@/lib/theme";
 
@@ -30,8 +30,9 @@ export default function InsightsScreen() {
   const store = useStore();
 
   const [week, setWeek] = useState({ sessions: 0, volumeKg: 0, prevVolumeKg: 0 });
-  const [trained, setTrained] = useState<boolean[]>(new Array(7).fill(false));
-  const [days, setDays] = useState<number[]>([]);
+  const [weekDays, setWeekDays] = useState<string[]>([]);
+  const [trained, setTrained] = useState<Set<string>>(new Set());
+  const [planned, setPlanned] = useState<Set<string>>(new Set());
   const [pbs, setPbs] = useState<Pb[]>([]);
   const [loading, setLoading] = useState(true);
   const [focusKey, setFocusKey] = useState(0);
@@ -39,8 +40,13 @@ export default function InsightsScreen() {
   const load = useCallback(async () => {
     const weekStart = startOfWeekIso();
     setWeek(await weekSummary(store, weekStart));
-    setTrained(await sessionsPerWeekday(store, weekStart));
-    setDays(await getTrainingDays(store));
+    // Veckans sju datum, så raden kan visa både planerat och utfört per dag.
+    const keys = Array.from({ length: 7 }, (_, i) =>
+      toDayKey(new Date(Date.parse(addDaysIso(weekStart, i)))),
+    );
+    setWeekDays(keys);
+    setTrained(new Set(await trainedDays(store, keys[0], keys[6])));
+    setPlanned(new Set(await listPlannedDays(store, keys[0], keys[6])));
 
     const found = await recentPbs(store, addDaysIso(new Date().toISOString(), -14));
     const named: Pb[] = [];
@@ -63,7 +69,7 @@ export default function InsightsScreen() {
 
   if (loading) return <Loading />;
 
-  const today = new Date().getDay();
+  const today = toDayKey();
   const hasPrev = week.prevVolumeKg > 0;
   const volumeShare = hasPrev ? week.volumeKg / week.prevVolumeKg : week.volumeKg > 0 ? 1 : 0;
   const volumeNote = hasPrev
@@ -77,10 +83,11 @@ export default function InsightsScreen() {
 
         <SectionLabel>Den här veckan</SectionLabel>
         <View className="mt-3 flex-row" style={{ gap: 6 }}>
-          {WEEKDAYS_MONDAY_FIRST.map(({ dow, short }) => {
-            const didTrain = trained[dow];
-            const planned = days.includes(dow);
-            const isToday = dow === today;
+          {WEEKDAYS_MONDAY_FIRST.map(({ dow, short }, i) => {
+            const day = weekDays[i] ?? "";
+            const didTrain = trained.has(day);
+            const isPlanned = planned.has(day);
+            const isToday = day === today;
             return (
               <View key={dow} className="flex-1 items-center">
                 <View
@@ -89,7 +96,7 @@ export default function InsightsScreen() {
                     height: 46,
                     borderRadius: radius.sm,
                     backgroundColor: didTrain ? colors.ok : isToday ? colors.accentSoft : colors.card,
-                    borderWidth: isToday && !didTrain ? 2 : planned && !didTrain ? 1 : 0,
+                    borderWidth: isToday && !didTrain ? 2 : isPlanned && !didTrain ? 1 : 0,
                     borderColor: isToday ? colors.accent : colors.line,
                   }}
                 >
@@ -110,9 +117,9 @@ export default function InsightsScreen() {
           })}
         </View>
         <Text style={{ fontSize: 12.5, color: colors.mutedDim, marginTop: 10 }}>
-          {days.length > 0
-            ? `${week.sessions} av ${days.length} planerade pass avklarade.`
-            : `${week.sessions} ${week.sessions === 1 ? "pass" : "pass"} den här veckan.`}
+          {planned.size > 0
+            ? `${trained.size} av ${planned.size} planerade pass avklarade.`
+            : `${week.sessions} pass den här veckan. Planera dagar i Planera-fliken.`}
         </Text>
 
         <View style={{ marginTop: 32 }}>

@@ -902,28 +902,6 @@ export async function sessionVolumeKg({ db }: Store, sessionId: string): Promise
   return row?.v ?? 0;
 }
 
-/**
- * Vilka veckodagar du faktiskt tränade en viss vecka.
- *
- * Index 0–6 är söndag–lördag, samma som `strftime('%w')` och `Date#getDay()`,
- * så veckoraden i Följ upp och dagväljaren i Planera talar samma språk.
- */
-export async function sessionsPerWeekday(
-  { db }: Store,
-  weekStartIso: string,
-): Promise<boolean[]> {
-  const weekEnd = new Date(Date.parse(weekStartIso) + 7 * 86_400_000).toISOString();
-  const rows = await db.getAllAsync<{ dow: number }>(
-    `SELECT DISTINCT CAST(strftime('%w', ended_at) AS INTEGER) AS dow
-     FROM session
-     WHERE deleted_at IS NULL AND ended_at >= ? AND ended_at < ?`,
-    [weekStartIso, weekEnd],
-  );
-  const out = new Array(7).fill(false);
-  for (const r of rows) out[r.dow] = true;
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // Inställningar
 // ---------------------------------------------------------------------------
@@ -948,50 +926,134 @@ export async function setSetting({ db, now }: Store, key: string, value: string)
 
 const TRAINING_DAYS_KEY = "training_days";
 
-/**
- * Veckodagarna du tänkt träna, som `strftime('%w')`-nummer.
- *
- * Tom lista = inget valt än. Det är ett giltigt tillstånd, inte ett fel:
- * startvyn ber dig välja i stället för att hitta på ett mål åt dig.
- */
-export async function getTrainingDays(store: Store): Promise<number[]> {
-  const raw = await getSetting(store, TRAINING_DAYS_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6)
-      : [];
-  } catch {
-    return [];
-  }
-}
+// ---------------------------------------------------------------------------
+// Planerade träningsdagar
+// ---------------------------------------------------------------------------
 
-export async function setTrainingDays(store: Store, days: number[]): Promise<void> {
-  const clean = [...new Set(days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
-  await setSetting(store, TRAINING_DAYS_KEY, JSON.stringify(clean));
+/**
+ * Dagarna du planerat i ett intervall, som 'YYYY-MM-DD'.
+ * Båda gränserna är inklusive — det är kalenderdatum, inte tidsstämplar.
+ */
+export async function listPlannedDays(
+  { db }: Store,
+  fromDay: string,
+  toDay: string,
+): Promise<string[]> {
+  const rows = await db.getAllAsync<{ day: string }>(
+    `SELECT day FROM planned_day
+     WHERE deleted_at IS NULL AND day >= ? AND day <= ?
+     ORDER BY day ASC`,
+    [fromDay, toDay],
+  );
+  return rows.map((r) => r.day);
 }
 
 /**
- * De två vanligaste träningsdagarna de senaste åtta veckorna.
+ * Slår på eller av en planerad dag.
  *
- * Returnerar tom lista när underlaget är tunt (< 4 pass) — en "vanlig dag"
- * härledd ur två pass är ett påstående datan inte bär, och ton B säger att
- * återkopplingen bara får påstå sanna saker.
+ * Raden återanvänds i stället för att skapas på nytt — annars skulle
+ * unique-indexet på `day` krocka med en tidigare mjukt raderad rad.
  */
-export async function usualWeekdays({ db }: Store, nowIso: string): Promise<number[]> {
-  const from = new Date(Date.parse(nowIso) - 8 * 7 * 86_400_000).toISOString();
-  const rows = await db.getAllAsync<{ dow: number; n: number }>(
-    `SELECT CAST(strftime('%w', started_at) AS INTEGER) AS dow, COUNT(*) AS n
-     FROM session
-     WHERE deleted_at IS NULL AND ended_at IS NOT NULL AND started_at >= ?
-     GROUP BY dow ORDER BY n DESC, dow ASC`,
-    [from],
+export async function setPlannedDay(
+  { db, uuid, now }: Store,
+  day: string,
+  planned: boolean,
+): Promise<void> {
+  const t = now();
+  const existing = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM planned_day WHERE day = ?",
+    [day],
   );
 
-  const total = rows.reduce((sum, r) => sum + r.n, 0);
-  if (total < 4) return [];
-  return rows.slice(0, 2).map((r) => r.dow);
+  if (existing) {
+    await db.runAsync("UPDATE planned_day SET deleted_at = ?, updated_at = ? WHERE id = ?", [
+      planned ? null : t,
+      t,
+      existing.id,
+    ]);
+    return;
+  }
+  if (!planned) return;
+
+  await db.runAsync(
+    "INSERT INTO planned_day (id, day, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    [uuid(), day, t, t],
+  );
+}
+
+/**
+ * Nästa planerade dag från och med `fromDay`.
+ *
+ * Null betyder att det inte finns något planerat framåt — ett giltigt läge som
+ * startvyn svarar på genom att be dig planera, inte genom att hitta på en dag.
+ */
+export async function nextPlannedDay({ db }: Store, fromDay: string): Promise<string | null> {
+  const row = await db.getFirstAsync<{ day: string }>(
+    "SELECT day FROM planned_day WHERE deleted_at IS NULL AND day >= ? ORDER BY day ASC LIMIT 1",
+    [fromDay],
+  );
+  return row?.day ?? null;
+}
+
+/** Dagarna i intervallet där ett pass faktiskt avslutades. */
+export async function trainedDays(
+  { db }: Store,
+  fromDay: string,
+  toDay: string,
+): Promise<string[]> {
+  const rows = await db.getAllAsync<{ day: string }>(
+    `SELECT DISTINCT date(ended_at, 'localtime') AS day
+     FROM session
+     WHERE deleted_at IS NULL AND ended_at IS NOT NULL
+       AND date(ended_at, 'localtime') >= ? AND date(ended_at, 'localtime') <= ?
+     ORDER BY day ASC`,
+    [fromDay, toDay],
+  );
+  return rows.map((r) => r.day);
+}
+
+/**
+ * Engångskonvertering: de återkommande veckodagarna blir riktiga datum.
+ *
+ * `training_days` hann ligga i en release innan kalendern byggdes. Utan det här
+ * hade valet bara försvunnit vid uppdateringen. Körs en gång — så snart det
+ * finns en planerad dag rör den ingenting.
+ */
+export async function migrateTrainingDaysToPlannedDays(
+  store: Store,
+  fromDay: string,
+  weeksAhead = 8,
+): Promise<number> {
+  const { db } = store;
+
+  const any = await db.getFirstAsync<{ n: number }>("SELECT COUNT(*) AS n FROM planned_day", []);
+  if ((any?.n ?? 0) > 0) return 0;
+
+  const raw = await getSetting(store, TRAINING_DAYS_KEY);
+  if (!raw) return 0;
+  let weekdays: number[] = [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) weekdays = parsed.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+  } catch {
+    return 0;
+  }
+  if (weekdays.length === 0) return 0;
+
+  const [y, m, d] = fromDay.split("-").map(Number);
+  const cursor = new Date(y, m - 1, d);
+  let added = 0;
+  for (let i = 0; i < weeksAhead * 7; i++) {
+    if (weekdays.includes(cursor.getDay())) {
+      const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(
+        cursor.getDate(),
+      ).padStart(2, "0")}`;
+      await setPlannedDay(store, key, true);
+      added++;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return added;
 }
 
 /**
