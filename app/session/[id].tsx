@@ -17,8 +17,14 @@ import {
   type SessionSummary,
   type SetEntry,
 } from "@/lib/db";
-import { SwipeRow } from "@/components/SwipeRow";
-import { Button, Card, Loading, NumberPrompt, SectionLabel } from "@/components/ui";
+import {
+  Button,
+  Card,
+  IconButton,
+  Loading,
+  NumberPrompt,
+  SectionLabel,
+} from "@/components/ui";
 import { describeDay, toDayKey } from "@/lib/dates";
 import { fmtVolume, fmtWeight, weightUnitLabel } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
@@ -30,6 +36,38 @@ const FEELINGS: { key: Feeling; label: string; icon: keyof typeof Feather.glyphM
 ];
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Ett tal som går att rätta. Ramen är hela poängen — den säger "tryck här". */
+function NumberChip({
+  label,
+  a11y,
+  onPress,
+}: {
+  label: string;
+  a11y: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={a11y}
+      className="items-center justify-center border border-line bg-card-hi active:opacity-60"
+      style={{ minHeight: 38, paddingHorizontal: 11, borderRadius: radius.sm }}
+    >
+      <Text
+        style={{
+          fontSize: 15,
+          fontWeight: "600",
+          color: colors.ink,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
 
 /**
  * Ett tidigare pass: läsa kommentaren, rätta ett felloggat set, radera.
@@ -229,7 +267,7 @@ export default function SessionScreen() {
         <View className="mt-8">
           <SectionLabel>Seten</SectionLabel>
           <Text className="mb-3 mt-1.5 text-[13px] leading-[18px] text-muted">
-            Svep ett set åt vänster för att rätta eller radera det. Volym och rekord räknas om.
+            Tryck på vikten eller reps för att rätta ett set. Volym och rekord räknas om.
           </Text>
 
           {groups.length === 0 ? (
@@ -247,37 +285,38 @@ export default function SessionScreen() {
                     </Text>
                     <View className="gap-2">
                       {g.sets.map((s) => (
-                        <SwipeRow
+                        <View
                           key={s.id}
-                          onEdit={() => setEditing({ set: s, field: "weight" })}
-                          onDelete={() => confirmDeleteSet(s, g.exercise.name)}
-                          deleteLabel="Radera"
+                          className="flex-row items-center border border-line bg-card pl-4"
+                          style={{ minHeight: 58, borderRadius: radius.md }}
                         >
-                          <Pressable
-                            onPress={() => setEditing({ set: s, field: "weight" })}
-                            onLongPress={() => setEditing({ set: s, field: "reps" })}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Set ${s.setIndex}, ${fmtWeight(s.weightKg)} ${unit} gånger ${s.reps}. Tryck för att rätta vikten, håll för reps.`}
-                            className="flex-row items-center gap-3 border border-line bg-card px-4 active:opacity-70"
-                            style={{ minHeight: 52, borderRadius: radius.md }}
-                          >
-                            <Text style={{ fontSize: 13, color: colors.muted, width: 46 }}>
-                              Set {s.setIndex}
-                            </Text>
-                            <Text
-                              className="flex-1"
-                              style={{
-                                fontSize: 15.5,
-                                fontWeight: "600",
-                                color: colors.ink,
-                                fontVariant: ["tabular-nums"],
-                              }}
-                            >
-                              {fmtWeight(s.weightKg)} {unit} × {s.reps}
-                            </Text>
-                            <Feather name="edit-2" size={15} color={colors.mutedDim} />
-                          </Pressable>
-                        </SwipeRow>
+                          <Text style={{ fontSize: 13, color: colors.muted, width: 46 }}>
+                            Set {s.setIndex}
+                          </Text>
+
+                          {/* Båda siffrorna är egna tryckytor — samma mönster som
+                              loggvyn. Ersätter ett dolt långtryck för reps. */}
+                          <View className="flex-1 flex-row items-center gap-1.5">
+                            <NumberChip
+                              label={`${fmtWeight(s.weightKg)} ${unit}`}
+                              a11y={`Vikt ${fmtWeight(s.weightKg)} ${unit} i set ${s.setIndex}. Tryck för att rätta.`}
+                              onPress={() => setEditing({ set: s, field: "weight" })}
+                            />
+                            <Text style={{ fontSize: 14, color: colors.mutedDim }}>×</Text>
+                            <NumberChip
+                              label={String(s.reps)}
+                              a11y={`${s.reps} reps i set ${s.setIndex}. Tryck för att rätta.`}
+                              onPress={() => setEditing({ set: s, field: "reps" })}
+                            />
+                          </View>
+
+                          <IconButton
+                            icon="trash-2"
+                            label={`Radera set ${s.setIndex} i ${g.exercise.name}`}
+                            tone="danger"
+                            onPress={() => confirmDeleteSet(s, g.exercise.name)}
+                          />
+                        </View>
                       ))}
                     </View>
                   </View>

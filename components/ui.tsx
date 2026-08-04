@@ -104,6 +104,42 @@ export function Chip({
 }
 
 /**
+ * Ikonknapp för radåtgärder — flytta, ta bort, radera.
+ *
+ * Byggd av `Pressable` och `Feather`, alltså exakt de primitiver resten av
+ * appen använder varje dag. Det är hela poängen: appen kör medvetet **ingen
+ * gestkod**, och radåtgärder ska vara synliga tryckytor i stället för dolda
+ * svep. Se gotchan om `ReanimatedSwipeable` i CLAUDE.md.
+ */
+export function IconButton({
+  icon,
+  label,
+  onPress,
+  disabled,
+  tone = "normal",
+}: {
+  icon: keyof typeof Feather.glyphMap;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  tone?: "normal" | "danger";
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
+      className="items-center justify-center active:opacity-60"
+      style={{ width: TAP * 0.72, height: TAP, opacity: disabled ? 0.25 : 1 }}
+    >
+      <Feather name={icon} size={21} color={tone === "danger" ? colors.danger : colors.ink} />
+    </Pressable>
+  );
+}
+
+/**
  * En siffra som betyder något, med sin jämförelse under.
  *
  * `note` får bara stå där när jämförelsen faktiskt går att göra. Ton B: positiv

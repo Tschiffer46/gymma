@@ -2,7 +2,6 @@ import { useCallback, useState } from "react";
 import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import {
   addRoutineItem,
@@ -15,9 +14,9 @@ import {
   type RoutineDetail,
 } from "@/lib/db";
 import { ExercisePicker } from "@/components/ExercisePicker";
-import { Button, Empty, Loading, SectionLabel } from "@/components/ui";
+import { Button, Empty, IconButton, Loading, SectionLabel } from "@/components/ui";
 import { muscleNames } from "@/lib/muscles";
-import { colors, TAP } from "@/lib/theme";
+import { colors } from "@/lib/theme";
 
 /**
  * Redigera en plan: döp om, lägg till övningar, ordna dem, ta bort.
@@ -210,33 +209,5 @@ export default function RoutineScreen() {
         onClose={() => setPicking(false)}
       />
     </SafeAreaView>
-  );
-}
-
-function IconButton({
-  icon,
-  label,
-  onPress,
-  disabled,
-  tone = "normal",
-}: {
-  icon: keyof typeof Feather.glyphMap;
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  tone?: "normal" | "danger";
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ disabled: !!disabled }}
-      className="items-center justify-center active:opacity-60"
-      style={{ width: TAP * 0.72, height: TAP, opacity: disabled ? 0.25 : 1 }}
-    >
-      <Feather name={icon} size={21} color={tone === "danger" ? colors.danger : colors.ink} />
-    </Pressable>
   );
 }

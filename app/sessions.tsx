@@ -4,8 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { deleteSession, listSessions, useStore, type SessionSummary } from "@/lib/db";
-import { SwipeRow } from "@/components/SwipeRow";
-import { Empty, Loading, SectionLabel } from "@/components/ui";
+import { Empty, IconButton, Loading, SectionLabel } from "@/components/ui";
 import { describeDay, describeMonth, toDayKey, toMonthKey } from "@/lib/dates";
 import { fmtVolume } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
@@ -84,7 +83,8 @@ export default function SessionsScreen() {
         ) : (
           <>
             <Text className="mb-5 mt-2 text-[13px] leading-[18px] text-muted">
-              Svep ett pass åt vänster för att rätta eller radera det. Ett tryck öppnar passet.
+              Tryck på ett pass för att läsa det och rätta enskilda set. Papperskorgen raderar
+              hela passet.
             </Text>
 
             {months.map((m) => (
@@ -92,12 +92,10 @@ export default function SessionsScreen() {
                 <SectionLabel>{describeMonth(m.key)}</SectionLabel>
                 <View className="mt-3 gap-2">
                   {m.items.map((s) => (
-                    <SwipeRow
+                    <View
                       key={s.id}
-                      onEdit={() =>
-                        router.push({ pathname: "/session/[id]", params: { id: s.id } })
-                      }
-                      onDelete={() => confirmDelete(s)}
+                      className="flex-row items-center border border-line bg-card pl-4"
+                      style={{ minHeight: 74, borderRadius: radius.md }}
                     >
                       <Pressable
                         onPress={() =>
@@ -105,10 +103,9 @@ export default function SessionsScreen() {
                         }
                         accessibilityRole="button"
                         accessibilityLabel={`${describeDay(toDayKey(new Date(s.endedAt)))}, ${s.gymName}, ${s.sets} set`}
-                        className="flex-row items-center gap-3 border border-line bg-card px-4 active:opacity-70"
-                        style={{ minHeight: 74, borderRadius: radius.md }}
+                        className="flex-1 flex-row items-center gap-2 py-3 active:opacity-70"
                       >
-                        <View className="flex-1 py-3">
+                        <View className="flex-1">
                           <Text
                             className="text-[16px] font-semibold text-ink"
                             numberOfLines={1}
@@ -131,7 +128,14 @@ export default function SessionsScreen() {
                         </View>
                         <Feather name="chevron-right" size={20} color={colors.muted} />
                       </Pressable>
-                    </SwipeRow>
+
+                      <IconButton
+                        icon="trash-2"
+                        label={`Radera passet ${describeDay(toDayKey(new Date(s.endedAt)))}`}
+                        tone="danger"
+                        onPress={() => confirmDelete(s)}
+                      />
+                    </View>
                   ))}
                 </View>
               </View>
