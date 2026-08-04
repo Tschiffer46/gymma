@@ -1,23 +1,42 @@
 import { useCallback, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import {
   getExercise,
+  listPlannedDays,
   monthlyTotals,
   recentPbs,
+  sessionsOnDay,
+  trainedDays,
   useStore,
   weekSummary,
   type MonthTotals,
+  type SessionSummary,
 } from "@/lib/db";
 import { FillBar } from "@/components/FillBar";
+import { MonthCalendar } from "@/components/MonthCalendar";
 import { Card, Empty, Loading, SectionLabel, StatTile } from "@/components/ui";
-import { addDaysIso, describeMonth, monthName, monthSpanDays, startOfWeekIso, toMonthKey } from "@/lib/dates";
+import {
+  addDaysIso,
+  describeDay,
+  describeMonth,
+  monthName,
+  monthSpanDays,
+  startOfWeekIso,
+  toMonthKey,
+} from "@/lib/dates";
 import { fmtVolume, fmtWeight } from "@/lib/format";
 import { colors, radius, tint } from "@/lib/theme";
 
 type Pb = { name: string; weightKg: number; deltaKg: number };
+
+const FEELING_LABEL: Record<string, string> = {
+  latt: "Lätt",
+  lagom: "Lagom",
+  tungt: "Tungt",
+};
 
 /** Hur många månader bakåt snittet får bygga på. */
 const COMPARE_MONTHS = 6;
@@ -33,10 +52,19 @@ const EMPTY_MONTH = (month: string): MonthTotals => ({ month, sessions: 0, volum
  */
 export default function InsightsScreen() {
   const store = useStore();
+  const router = useRouter();
 
   const [week, setWeek] = useState({ sessions: 0, volumeKg: 0, prevVolumeKg: 0 });
   const [months, setMonths] = useState<MonthTotals[]>([]);
   const [monthKey, setMonthKey] = useState(() => toMonthKey());
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+  const [trained, setTrained] = useState<Set<string>>(new Set());
+  const [planned, setPlanned] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<string | null>(null);
+  const [daySessions, setDaySessions] = useState<SessionSummary[]>([]);
   const [pbs, setPbs] = useState<Pb[]>([]);
   const [loading, setLoading] = useState(true);
   const [focusKey, setFocusKey] = useState(0);
@@ -49,6 +77,12 @@ export default function InsightsScreen() {
     setMonths(await monthlyTotals(store, span.from, span.to));
     setMonthKey(toMonthKey(now));
 
+    // Brett intervall så månadsbyte i kalendern inte kräver ett nytt anrop.
+    const from = `${month.year - 1}-01-01`;
+    const to = `${month.year + 1}-12-31`;
+    setTrained(new Set(await trainedDays(store, from, to)));
+    setPlanned(new Set(await listPlannedDays(store, from, to)));
+
     const found = await recentPbs(store, addDaysIso(new Date().toISOString(), -14));
     const named: Pb[] = [];
     for (const p of found.slice(0, 5)) {
@@ -60,12 +94,24 @@ export default function InsightsScreen() {
     setLoading(false);
     // Nytt värde ⇒ fyllnadsstaven spelas om varje gång vyn får fokus.
     setFocusKey((k) => k + 1);
-  }, [store]);
+  }, [store, month.year]);
 
   useFocusEffect(
     useCallback(() => {
       load();
     }, [load]),
+  );
+
+  // Passen för den valda dagen hämtas separat: valet ändras oftare än resten
+  // av vyn, och en dag har nästan alltid ett enda pass.
+  const loadDay = useCallback(async () => {
+    setDaySessions(selected ? await sessionsOnDay(store, selected) : []);
+  }, [store, selected]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadDay();
+    }, [loadDay]),
   );
 
   if (loading) return <Loading />;
@@ -129,6 +175,75 @@ export default function InsightsScreen() {
             ? "Första månaden med data. Jämförelsen dyker upp när det finns en månad att mäta mot."
             : `Jämfört med ${basis} — bara månader du faktiskt tränat räknas in.`}
         </Text>
+
+        {/* Kalendern svarar på "vad gjorde jag den dagen" — inklusive
+            kommentaren, som annars aldrig gick att läsa igen. */}
+        <View style={{ marginTop: 32 }}>
+          <SectionLabel>Dina pass</SectionLabel>
+          <Text style={{ fontSize: 13, color: colors.muted, marginTop: 6, marginBottom: 14 }}>
+            Grönt är dagar du tränat. Tryck på en för att se passet.
+          </Text>
+          <MonthCalendar
+            year={month.year}
+            month={month.month}
+            mode="history"
+            planned={planned}
+            trained={trained}
+            selected={selected}
+            onToggle={(day) => setSelected((cur) => (cur === day ? null : day))}
+            onChangeMonth={(year, m) => {
+              setSelected(null);
+              setMonth({ year, month: m });
+            }}
+          />
+
+          {selected ? (
+            <View className="mt-4 gap-2">
+              {daySessions.map((s) => (
+                <Pressable
+                  key={s.id}
+                  onPress={() => router.push({ pathname: "/session/[id]", params: { id: s.id } })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Öppna passet ${describeDay(selected)}`}
+                  className="flex-row items-center gap-3 border border-line bg-card px-4 active:opacity-70"
+                  style={{ minHeight: 72, borderRadius: radius.md }}
+                >
+                  <View className="flex-1 py-3">
+                    <Text style={{ fontSize: 15.5, fontWeight: "600", color: colors.ink }}>
+                      {[s.gymName, s.routineName].filter(Boolean).join(" · ")}
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        color: colors.muted,
+                        marginTop: 2,
+                        fontVariant: ["tabular-nums"],
+                      }}
+                    >
+                      {s.sets} set · {s.exercises}{" "}
+                      {s.exercises === 1 ? "övning" : "övningar"} · {fmtVolume(s.volumeKg)}
+                      {s.feeling ? ` · ${FEELING_LABEL[s.feeling]}` : ""}
+                    </Text>
+                    {s.notes ? (
+                      <Text
+                        style={{
+                          fontSize: 13.5,
+                          color: colors.ink,
+                          marginTop: 6,
+                          lineHeight: 19,
+                          fontStyle: "italic",
+                        }}
+                      >
+                        ”{s.notes}”
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Feather name="chevron-right" size={20} color={colors.muted} />
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </View>
 
         <View style={{ marginTop: 32 }}>
           <View className="flex-row items-center justify-between" style={{ marginBottom: 10 }}>

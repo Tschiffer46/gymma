@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { useEffect, useState, type ReactNode } from "react";
+import { ActivityIndicator, Modal, Pressable, Text, TextInput, View } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Feather } from "@expo/vector-icons";
-import { colors, TAP } from "@/lib/theme";
+import { colors, radius, TAP } from "@/lib/theme";
 import { fmtWeight } from "@/lib/format";
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
@@ -275,5 +275,97 @@ export function Loading() {
     <View className="flex-1 items-center justify-center bg-bg">
       <ActivityIndicator color={colors.accent} />
     </View>
+  );
+}
+
+/**
+ * Skriv in ett tal direkt i stället för att stega dit.
+ *
+ * **Undantaget från designprincip 2** ("aldrig tangentbord under passet"):
+ * +/– är fortfarande huvudvägen och det enda man behöver mellan set, men ska du
+ * från 20 till 60 kg är fyrtio tryck sämre än att skriva siffran. Genvägen
+ * öppnas bara när du själv trycker på talet.
+ *
+ * Decimalkomma in och ut — `47,5` är svenska, `47.5` är det inte.
+ */
+export function NumberPrompt({
+  open,
+  title,
+  unit,
+  value,
+  decimals = false,
+  min = 0,
+  onSubmit,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  unit: string;
+  value: number;
+  decimals?: boolean;
+  min?: number;
+  onSubmit: (next: number) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+
+  // Fältet ska alltid öppna med det som står på skärmen, inte med det man
+  // råkade skriva förra gången.
+  useEffect(() => {
+    if (open) setText(decimals ? fmtWeight(value) : String(value));
+  }, [open, value, decimals]);
+
+  function commit() {
+    const parsed = Number(text.replace(",", ".").trim());
+    if (!Number.isFinite(parsed) || parsed < min) {
+      onClose();
+      return;
+    }
+    onSubmit(Math.round(parsed * 100) / 100);
+  }
+
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable className="flex-1 items-center justify-center bg-black/70 px-8" onPress={onClose}>
+        <Pressable
+          className="w-full border border-line bg-card"
+          style={{ borderRadius: radius.xl, paddingHorizontal: 20, paddingVertical: 22 }}
+        >
+          <Text className="text-xs font-semibold uppercase tracking-widest text-muted">
+            {title}
+          </Text>
+
+          <View className="mt-3 flex-row items-baseline gap-2">
+            <TextInput
+              value={text}
+              onChangeText={setText}
+              keyboardType={decimals ? "decimal-pad" : "number-pad"}
+              autoFocus
+              selectTextOnFocus
+              returnKeyType="done"
+              onSubmitEditing={commit}
+              className="flex-1 border-b border-line text-ink"
+              style={{
+                fontSize: 46,
+                fontWeight: "700",
+                letterSpacing: -1.5,
+                paddingBottom: 6,
+                fontVariant: ["tabular-nums"],
+              }}
+            />
+            <Text style={{ fontSize: 17, fontWeight: "600", color: colors.muted }}>{unit}</Text>
+          </View>
+
+          <View className="mt-6 flex-row gap-2">
+            <View className="flex-1">
+              <Button label="Avbryt" variant="ghost" onPress={onClose} />
+            </View>
+            <View className="flex-1">
+              <Button label="Spara" onPress={commit} />
+            </View>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }

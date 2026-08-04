@@ -862,6 +862,184 @@ async function main() {
     "en period utan pass ger inga rader alls — inget snitt att dela med noll",
   );
 
+  console.log("Passhistorik");
+  // Egen databas: historiken ska ha ett exakt underlag, inte allt som råkat
+  // loggas ovan.
+  const hdb = new DatabaseSync(":memory:");
+  let hclock = Date.parse("2026-08-10T09:00:00.000Z");
+  const hstore = { db: adapter(hdb), uuid: randomUUID, now: () => new Date(hclock).toISOString() };
+  await core.initStore(hstore);
+
+  const hgyms = await q.listGyms(hstore);
+  const hbar = (await q.findExerciseByName(hstore, "Bänkpress")).id; // total
+  const hlift = (await q.findExerciseByName(hstore, "Sidolyft")).id; // per_hand
+
+  eq((await q.listSessions(hstore)).length, 0, "tom historik från start");
+
+  const h1 = await q.startSession(hstore, hgyms[0].id);
+  for (const [w, r, i] of [[100, 10, 1], [100, 8, 2]]) {
+    await q.logSet(hstore, {
+      sessionId: h1.id, exerciseId: hbar, machineId: null, weightKg: w, reps: r, setIndex: i,
+    });
+  }
+  await q.logSet(hstore, {
+    sessionId: h1.id, exerciseId: hlift, machineId: null, weightKg: 10, reps: 12, setIndex: 1,
+  });
+  hclock += 50 * 60_000;
+  await q.endSession(hstore, h1.id, { feeling: "lagom", notes: "Ont i axeln" });
+
+  const hs1 = (await q.listSessions(hstore))[0];
+  eq(hs1.gymName, "Hemmagym", "gymnamnet följer med utan ett anrop per rad");
+  eq(hs1.sets, 3, "antal set räknas");
+  eq(hs1.exercises, 2, "antal övningar räknas");
+  eq(hs1.volumeKg, 2040, "volymen räknar hantlar dubbelt (1000 + 800 + 240)");
+  eq(hs1.feeling, "lagom", "känslan följer med");
+  eq(hs1.notes, "Ont i axeln", "kommentaren går att läsa igen");
+  eq(hs1.routineName, null, "pass utan plan har ingen plan");
+
+  hclock = Date.parse("2026-08-11T17:00:00.000Z");
+  const hroutine = await q.createRoutine(hstore, "Ben");
+  await q.addRoutineItem(hstore, hroutine, hbar);
+  const h2 = await q.startSession(hstore, hgyms[1].id, hroutine);
+  await q.logSet(hstore, {
+    sessionId: h2.id, exerciseId: hbar, machineId: null, weightKg: 60, reps: 10, setIndex: 1,
+  });
+  hclock += 30 * 60_000;
+  await q.endSession(hstore, h2.id, { feeling: null, notes: null });
+
+  const hlist = await q.listSessions(hstore);
+  eq(hlist.length, 2, "båda passen finns i historiken");
+  eq(hlist[0].id, h2.id, "nyast först");
+  eq(hlist[0].routineName, "Ben", "plannamnet följer med");
+
+  // Ett PÅGÅENDE pass hör hemma i Gymma-fliken, inte i loggboken.
+  hclock = Date.parse("2026-08-12T09:00:00.000Z");
+  const hOpen = await q.startSession(hstore, hgyms[0].id);
+  await q.logSet(hstore, {
+    sessionId: hOpen.id, exerciseId: hbar, machineId: null, weightKg: 70, reps: 5, setIndex: 1,
+  });
+  eq((await q.listSessions(hstore)).length, 2, "pågående pass syns inte i historiken");
+  eq((await q.sessionsOnDay(hstore, "2026-08-12")).length, 0, "och hamnar inte på sin dag heller");
+
+  // sessionsOnDay måste dra dygnsgränsen på EXAKT samma sätt som trainedDays,
+  // annars skulle kalendern markera en dag som man inte kan öppna.
+  const hdays = await q.trainedDays(hstore, "2026-08-01", "2026-08-31");
+  eq(hdays.length, 2, "två tränade dagar");
+  let hFound = 0;
+  for (const d of hdays) hFound += (await q.sessionsOnDay(hstore, d)).length;
+  eq(hFound, 2, "sessionsOnDay hittar samma pass som trainedDays — samma dygnsgräns");
+
+  hclock += 20 * 60_000;
+  await q.endSession(hstore, hOpen.id, { feeling: null, notes: null });
+
+  const hgroups = await q.sessionExerciseGroups(hstore, h1.id);
+  eq(hgroups.length, 2, "seten grupperas per övning");
+  eq(hgroups[0].exercise.name, "Bänkpress", "övningarna kommer i loggordning");
+  eq(hgroups[0].sets.length, 2, "två set på första övningen");
+  eq(hgroups[1].sets.length, 1, "ett set på den andra");
+
+  console.log("Rätta ett pass i efterhand");
+  await q.updateSession(hstore, h1.id, { feeling: "latt", notes: "Axeln bättre nu" });
+  const hEdited = await q.getSessionSummary(hstore, h1.id);
+  eq(hEdited.notes, "Axeln bättre nu", "kommentaren går att rätta");
+  eq(hEdited.feeling, "latt", "känslan går att rätta");
+  await q.updateSession(hstore, h1.id, { notes: "   " });
+  eq((await q.getSessionSummary(hstore, h1.id)).notes, null, "tom kommentar sparas som null");
+
+  await q.updateSet(hstore, hgroups[0].sets[0].id, { weightKg: 110, reps: 9 });
+  eq(
+    (await q.getSessionSummary(hstore, h1.id)).volumeKg,
+    110 * 9 + 100 * 8 + 240,
+    "volymen räknas om efter ett rättat set — den lagras aldrig",
+  );
+  eq(
+    await q.bestWeightOnMachine(hstore, { exerciseId: hbar, machineId: null }),
+    110,
+    "det rättade setet slår igenom i rekordet",
+  );
+
+  console.log("Radera pass tar seten med sig");
+  // DET HÄR är bygget farligaste fel: lämnas seten kvar fortsätter ett raderat
+  // pass styra förifyllning och rekord, medan månadsbrickorna ser rätt ut.
+  ok((await q.lastSets(hstore, hbar, null)).length > 0, "det finns set att förifylla från");
+  await q.deleteSession(hstore, h1.id);
+
+  eq((await q.listSessions(hstore)).length, 2, "passet försvinner ur historiken");
+  eq(await q.getSessionSummary(hstore, h1.id), null, "och går inte att öppna igen");
+  eq(
+    await q.bestWeightOnMachine(hstore, { exerciseId: hbar, machineId: null }),
+    70,
+    "rekordet från det raderade passet räknas INTE längre",
+  );
+  const hAfter = await q.lastSets(hstore, hbar, null);
+  eq(hAfter.length, 1, "förifyllningen kommer nu från passet innan");
+  eq(hAfter[0].weightKg, 70, "och har det passets vikt");
+  ok(
+    !(await q.recentPbs(hstore, "2026-08-01T00:00:00.000Z")).some((p) => p.weightKg === 110),
+    "raderade set kan inte bli rekord",
+  );
+  const hMonth = await q.monthlyTotals(hstore, "2026-08-01", "2026-08-31");
+  eq(hMonth[0].sessions, 2, "månadsbrickan tappar det raderade passet");
+  eq(hMonth[0].volumeKg, 950, "och dess volym (600 + 350)");
+  eq((await q.sessionExerciseGroups(hstore, h1.id)).length, 0, "passets set är borta");
+
+  console.log("Viktsteget normaliseras en gång");
+  // Simulera en telefon som redan har biblioteket på det gamla 2,5 kg-steget.
+  const sdb = new DatabaseSync(":memory:");
+  const sstore = { db: adapter(sdb), uuid: randomUUID, now: () => new Date(hclock).toISOString() };
+  await core.initStore(sstore);
+  sdb.prepare("UPDATE exercise SET weight_step = 2.5").run();
+  sdb.prepare("DELETE FROM app_setting WHERE key = 'weight_step_1kg'").run();
+
+  const sgym = (await q.listGyms(sstore))[0].id;
+  const sEx = (await q.findExerciseByName(sstore, "Bänkpress")).id;
+  // En maskin med ett riktigt viktmagasin ska INTE röras.
+  const sMachine = await q.createMachine(sstore, {
+    gymId: sgym, exerciseId: sEx, weightStep: 5,
+  });
+
+  ok((await core.normaliseWeightSteps(sstore)) > 0, "gamla 2,5 kg-steg justeras");
+  eq((await q.getExercise(sstore, sEx)).weightStep, 1, "övningen stegar nu 1 kg");
+  eq(
+    (await q.getMachine(sstore, sEx, sgym)).weightStep,
+    5,
+    "maskinens steg rörs INTE — magasinet går faktiskt i 5 kg",
+  );
+  eq(q.weightStepFor(await q.getExercise(sstore, sEx), await q.getMachine(sstore, sEx, sgym)), 5,
+    "och maskinens steg vinner fortfarande i loggvyn");
+
+  // Ett eget val i efterhand ska stå kvar.
+  await q.setWeightStep(sstore, { exerciseId: sEx, machineId: null }, 2.5);
+  eq(await core.normaliseWeightSteps(sstore), 0, "justeringen körs bara en gång");
+  eq(
+    (await q.getExercise(sstore, sEx)).weightStep,
+    2.5,
+    "ett eget val av 2,5 kg efteråt skrivs aldrig över",
+  );
+  eq(await core.normaliseWeightSteps(hstore), 0, "en färsk databas har inget att justera");
+
+  console.log("Maskinen skapas när den används");
+  const hmEx = await q.createExercise(hstore, {
+    name: "Bröstpress", type: "machine", weightUnit: "total", weightStep: 5,
+  });
+  ok(
+    !(await q.listExercisesForGym(hstore, hgyms[1].id, null)).some((i) => i.exercise.id === hmEx),
+    "en maskinövning utan maskin syns inte på gymmet — buggen vi fixar",
+  );
+
+  const hm1 = await q.getOrCreateMachine(hstore, hmEx, hgyms[0].id, 5);
+  eq(
+    (await q.getOrCreateMachine(hstore, hmEx, hgyms[0].id, 5)).id,
+    hm1.id,
+    "andra anropet återanvänder raden i stället för att skapa en till",
+  );
+  const hm2 = await q.getOrCreateMachine(hstore, hmEx, hgyms[1].id, 5);
+  ok(hm2.id !== hm1.id, "varje gym får sin egen maskin — viktskalor skiljer sig");
+  ok(
+    (await q.listExercisesForGym(hstore, hgyms[1].id, null)).some((i) => i.exercise.id === hmEx),
+    "och nu syns övningen på gymmet där den använts",
+  );
+
     console.log("Datumhjälpare");
   eq(dates.toDayKey(new Date(2026, 7, 4)), "2026-08-04", "lokalt datum blir rätt nyckel");
   eq(dates.daysBetween("2026-08-04", "2026-08-06"), 2, "dagar mellan datum räknas rätt");

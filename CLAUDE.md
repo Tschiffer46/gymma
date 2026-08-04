@@ -15,6 +15,9 @@ Vid konflikt vinner principen. De kommer från kravspecen och är hela poängen 
 1. **Ett tryck per set.** Loggvyn är redan ifylld med förra passets siffror.
 2. **Aldrig tangentbord under passet.** Endast stora +/– och bekräfta. Tangentbord är tillåtet
    när man lägger till en ny övning eller döper om ett gym — aldrig mellan set.
+   **Undantag (beslutat 2026-08-04):** ett tryck på själva siffran i loggvyn öppnar ett
+   numeriskt fält. +/– är fortfarande huvudvägen och det enda man *behöver*; genvägen finns
+   för hoppet från 20 till 60 kg, som annars är fyrtio tryck. Appen tvingar aldrig fram den.
 3. **Fungerar helt offline.** Gymkällare har usel täckning. Nät är en bonus, aldrig ett krav.
 4. **Programmet växer fram.** Det finns ingen "skapa program"-vy. Maskiner läggs till när de
    används, inte i förväg.
@@ -40,11 +43,14 @@ app/
 │   └── settings.tsx       Gym (namn, lägg till) + versionsmarkör
 ├── log/[exerciseId].tsx   LOGGVYN — appens hjärta
 ├── session/end.tsx        Avsluta pass: känsla + anteckning
+├── session/[id].tsx       Ett tidigare pass: läs, rätta set, radera
+├── sessions.tsx           Loggboken (nås från Inställningar)
 ├── routine/[id].tsx       Redigera plan: namn, lägg till, omordna, ta bort
 ├── library.tsx            Övningsbibliotek med sök (nås från Inställningar)
 ├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 └── exercise/[id].tsx      Redigera övning: namn, engelskt namn, viktenhet, steg
-components/  ui.tsx (Card/Button/Chip/StatTile/Empty/Loading/SearchField) · ExerciseRow.tsx
+components/  ui.tsx (Card/Button/Chip/StatTile/NumberPrompt/Empty/Loading/SearchField)
+             · ExerciseRow.tsx · ExercisePicker.tsx (hela biblioteket) · SwipeRow.tsx
              · WeekRing.tsx (SVG) · FillBar.tsx · StartSheet.tsx · MonthCalendar.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
@@ -111,6 +117,18 @@ de olika poster för samma sak splittras månadstrenden i två halva serier som 
 **Progression mäts per `machine_id`**, inte per övning. Därför är `machine` en fysisk instans
 på ett specifikt gym, och `listExercisesForGym` visar bara maskiner som står på det gymmet.
 Volym per muskelgrupp aggregeras däremot över allt.
+
+**Men det filtret får aldrig läcka ut i en väljare.** Fram till 2026-08-04 gjorde det det, och
+resultatet var en riktig bugg: en maskin du lagt till på ett gym var *osynlig* på alla andra,
+och enda vägen in var att skriva namnet på nytt under "Ny övning eller maskin". Två regler
+håller det borta:
+
+- **Väljare går mot hela biblioteket** (`listAllExercises`), aldrig mot `listExercisesForGym`.
+  `components/ExercisePicker.tsx` är den enda väljaren och används av både passet och
+  planredigeraren. En plan har dessutom med flit ingen gymkoppling.
+- **`getOrCreateMachine` skapar raden vid första loggade setet.** Det är designprincip 4 rakt
+  av — maskiner läggs till när de används, inte i förväg — och progressionen hamnar på rätt
+  gym. En maskinövning som aldrig använts här visas som "Ny här", i `muted`, inte i rött.
 
 ### Hantelkonvention
 `weight_unit = 'per_hand'` betyder att vikten som skrivs in är **per hantel**. Volym räknas ×2.
@@ -194,6 +212,25 @@ man ett set utan öppet pass ska setet aldrig gå förlorat bara för att en kna
 - `getCurrentSession()` har kvar `SESSION_WINDOW_HOURS` = 6 h som bortre gräns, så ett glömt
   pass inte står öppet i dagar.
 - Avbockningen i listan är helt enkelt "har den här övningen set i det pågående passet".
+
+**Övningar utanför planen** härleds ur samma sak: `doneToday && !planIds.includes(id)` ligger
+kvar i Planen-fliken som "extras". Ingen ny tabell, och det överlever att iOS dödar appen mitt
+i passet — till skillnad från komponenttillstånd.
+
+### Historiken är inte skrivskyddad
+`deleteSession`, `updateSession`, `updateSet` och `deleteSet` finns för att ett felloggat set
+annars låg kvar för alltid och drog med sig både förifyllning och rekord.
+
+**`deleteSession` MÅSTE mjukradera passets set.** `lastSets`, `bestWeightOnMachine`,
+`recentPbs` och `listExercisesForGym` filtrerar bara på `set_entry.deleted_at` och joinar
+aldrig `session`. Lämnas seten kvar fortsätter ett raderat pass styra loggvyn — och felet är
+lömskt, för `weekSummary` och `monthlyTotals` joinar session och hade sett helt rätt ut.
+`scripts/verify-db.cjs` har ett eget testfall som spärrar just det.
+
+Två följdregler:
+- Historik = `ended_at IS NOT NULL`. Ett pågående pass hör hemma i Gymma-fliken.
+- Raderar man passets sista set raderas **inte** passet automatiskt, till skillnad från
+  `endSession` som kastar tomma pass. Tittar man på posten ska man själv få bestämma.
 
 ## Konventioner
 - **Språk i UI: svenska.** Även kodkommentarer. Tal med decimalkomma (`fmtWeight`).
@@ -376,6 +413,12 @@ telefonen. Testa den så här:
   veckoraden i Följ upp utbytt mot fyra månadsbrickor (pass, flyttat, set, per pass) mätta mot
   snittet av de senaste sex månaderna. Nya aggregat: `listTopGyms`, `listTopRoutines`,
   `listPlannedDayPlans`, `setPlannedDayRoutine`, `plannedRoutineForDay`, `monthlyTotals`.
+- **Loggboken** ✅ Passhistorik som går att rätta: `app/sessions.tsx` (nås från Inställningar)
+  och `app/session/[id].tsx`, svep åt vänster via `components/SwipeRow.tsx`
+  (`ReanimatedSwipeable` — redan installerad gesture-handler, ingen ny modul). Kalendern i
+  Följ upp visar tränade dagar och passets sammanfattning **inklusive kommentaren**.
+  Samtidigt: gym-buggen (se "viktskalor" ovan), "Lägg till övning" mitt i ett planerat pass,
+  viktsteg 1 kg och tryckbara siffror i loggvyn.
 - **Nästa** — nästa-kort under passet (lätt version av 1c: tydligt kort överst, **utan** den
   ritade banan och den pulserande noden), sedan progression per maskin och träningsfrekvens
   i Följ upp. `react-native-svg` finns redan ⇒ OTA.
@@ -387,7 +430,9 @@ uttryckligen om färre funktioner hellre än fler.
 
 Veckoraden ur Skärm 5 byggdes först i Följ upp men **togs bort igen** — sju rutor svarar på
 "vilka dagar", inte på "hur går det", och månadsbrickorna gör jobbet bättre. Återinför den inte.
-- **Sprint 3.5** — redigera/radera set i efterhand, passhistorik som egen vy.
+- **Delning och beröm** — dela resultat/planer med familjen och kunna säga "bra jobbat".
+  Efterfrågat 2026-08-04. Obs: det bryter mot "var sin egen loggbok, ingen backend" och kräver
+  ett eget designbeslut innan något byggs. Se även "Bygg inte detta" nedan.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
   taggen exponerar ett läsbart maskin-ID ersätter det hela OCR-steget.
@@ -413,6 +458,10 @@ punkten:** progression mot sig själv — veckoring, volymjämförelse, PB-chip,
 
 Det som fortfarande är bortvalt är **det sociala**: att dela pass, se andras data eller jämföra
 sig med någon annan. Varje familjemedlem har sin egen lokala loggbok, och det står fast.
+
+> **Öppen fråga 2026-08-04:** Thomas har efterfrågat att kunna dela resultat och planer och ge
+> varandra beröm. Det är en direkt konflikt med "ingen backend, ingen sync" — bygg det inte
+> som en sidoeffekt av något annat. Det kräver ett eget beslut om var datan ska ta vägen.
 
 Riv alltså inte veckoringen, PB-chippet eller nivåvyn som scope creep — de är beställda.
 Ton B gäller för all sådan copy: inga utropstecken, ingen coach, och **positiv återkoppling får

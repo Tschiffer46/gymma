@@ -5,7 +5,7 @@
 // React-/expo-sidan ligger i index.ts och bygger en Store av den här filen.
 
 import { MIGRATIONS } from "./migrations";
-import { SEED_EXERCISES, SEED_GYMS, FREEWEIGHT_STEP } from "./seed";
+import { SEED_EXERCISES, SEED_GYMS, FREEWEIGHT_STEP, LEGACY_FREEWEIGHT_STEP } from "./seed";
 import { normalizeName } from "./match";
 
 export const DB_NAME = "gymma.db";
@@ -162,9 +162,58 @@ export async function topUpLibrary(store: Store): Promise<{ added: number; named
   return { added, named };
 }
 
+/** Nyckeln som ser till att justeringen nedan körs exakt en gång. */
+const STEP_NORMALISED_KEY = "weight_step_1kg";
+
+/**
+ * Engångsjustering: standardövningar som fortfarande står på det gamla
+ * seed-steget 2,5 kg flyttas till 1 kg.
+ *
+ * Behövs eftersom viktsteget **lagras per övning**. En ändrad konstant i
+ * seed.ts når bara nya installationer — telefoner som redan har biblioteket
+ * hade fortsatt stega 2,5 kg för alltid.
+ *
+ * Två avgränsningar gör den säker:
+ * - **`machine` rörs inte.** Maskinens steg hör till ett fysiskt viktmagasin
+ *   och är valt för att stacken faktiskt går i 5 kg.
+ * - Bara rader som står på *exakt* det gamla värdet ändras, och bara en gång.
+ *   Sätter du 2,5 kg själv i morgon står det kvar.
+ */
+export async function normaliseWeightSteps(store: Store): Promise<number> {
+  const { db, now } = store;
+
+  const done = await db.getFirstAsync<{ key: string }>(
+    "SELECT key FROM app_setting WHERE key = ? AND deleted_at IS NULL",
+    [STEP_NORMALISED_KEY],
+  );
+  if (done) return 0;
+
+  const ts = now();
+  const affected = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM exercise WHERE weight_step = ?",
+    [LEGACY_FREEWEIGHT_STEP],
+  );
+  await db.runAsync("UPDATE exercise SET weight_step = ?, updated_at = ? WHERE weight_step = ?", [
+    FREEWEIGHT_STEP,
+    ts,
+    LEGACY_FREEWEIGHT_STEP,
+  ]);
+  await db.runAsync(
+    `INSERT INTO app_setting (key, value, created_at, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at,
+                                    deleted_at = NULL`,
+    [STEP_NORMALISED_KEY, ts, ts, ts],
+  );
+
+  return affected?.n ?? 0;
+}
+
 /** Migrationer + seed + komplettering. Körs en gång vid appstart. */
 export async function initStore(store: Store): Promise<void> {
   await runMigrations(store.db);
   const seeded = await seedIfEmpty(store);
   if (!seeded) await topUpLibrary(store);
+  // Körs även på en färsk databas — då finns inget att ändra, men markören
+  // sätts så att justeringen aldrig kan slå till senare.
+  await normaliseWeightSteps(store);
 }

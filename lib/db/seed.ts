@@ -25,8 +25,21 @@ export type SeedExercise = {
   secondary: string[];
 };
 
-/** Fria vikter går sällan i 5 kg-steg — hantelställ hoppar oftast 2 kg, stänger 2,5. */
-export const FREEWEIGHT_STEP = 2.5;
+/**
+ * Viktsteget nya övningar får.
+ *
+ * 1 kg är det finaste steget och fungerar överallt — går magasinet i 5 kg
+ * väljer man det ett tryck bort i loggvyn, och valet sparas per maskin. Att
+ * börja grovt och tvinga fram ett byte är sämre än tvärtom.
+ */
+export const FREEWEIGHT_STEP = 1;
+
+/**
+ * Det gamla seed-steget. Finns kvar som måltavla för engångsjusteringen i
+ * `normaliseWeightSteps` — telefoner som redan har biblioteket har 2,5 kg
+ * sparat, och en ändrad konstant når dem aldrig av sig själv.
+ */
+export const LEGACY_FREEWEIGHT_STEP = 2.5;
 
 export const SEED_EXERCISES: SeedExercise[] = [
   // --- Bröst ---

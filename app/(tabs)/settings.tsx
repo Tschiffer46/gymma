@@ -85,21 +85,22 @@ export default function SettingsScreen() {
 
         <View className="mt-9">
           <SectionLabel>Övningar</SectionLabel>
-          <Pressable
+          <SettingsRow
+            icon="list"
+            title="Övningsbibliotek"
+            body="Ändra namn, viktenhet och viktsteg. Radera det du aldrig kör."
             onPress={() => router.push("/library")}
-            accessibilityRole="button"
-            className="mt-2 flex-row items-center gap-3 rounded-[12px] border border-line bg-card px-4 active:opacity-70"
-            style={{ minHeight: 58 }}
-          >
-            <Feather name="list" size={18} color={colors.muted} />
-            <View className="flex-1">
-              <Text className="text-[16px] text-ink">Övningsbibliotek</Text>
-              <Text className="mt-0.5 text-[12.5px] text-muted">
-                Ändra namn, viktenhet och viktsteg. Radera det du aldrig kör.
-              </Text>
-            </View>
-            <Feather name="chevron-right" size={20} color={colors.muted} />
-          </Pressable>
+          />
+        </View>
+
+        <View className="mt-9">
+          <SectionLabel>Historik</SectionLabel>
+          <SettingsRow
+            icon="book-open"
+            title="Träningspass"
+            body="Läs igenom, rätta ett felloggat set eller radera ett pass."
+            onPress={() => router.push("/sessions")}
+          />
         </View>
 
         <View className="mt-9">
@@ -117,6 +118,35 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function SettingsRow({
+  icon,
+  title,
+  body,
+  onPress,
+}: {
+  icon: keyof typeof Feather.glyphMap;
+  title: string;
+  body: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      className="mt-2 flex-row items-center gap-3 rounded-[12px] border border-line bg-card px-4 active:opacity-70"
+      style={{ minHeight: 58 }}
+    >
+      <Feather name={icon} size={18} color={colors.muted} />
+      <View className="flex-1 py-2.5">
+        <Text className="text-[16px] text-ink">{title}</Text>
+        <Text className="mt-0.5 text-[12.5px] text-muted">{body}</Text>
+      </View>
+      <Feather name="chevron-right" size={20} color={colors.muted} />
+    </Pressable>
   );
 }
 

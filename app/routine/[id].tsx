@@ -7,18 +7,15 @@ import * as Haptics from "expo-haptics";
 import {
   addRoutineItem,
   deleteRoutine,
-  getActiveGym,
   getRoutine,
-  listExercisesForGym,
-  matchesQuery,
   moveRoutineItem,
   removeRoutineItem,
   renameRoutine,
   useStore,
-  type ExerciseListItem,
   type RoutineDetail,
 } from "@/lib/db";
-import { Button, Empty, Loading, SearchField, SectionLabel } from "@/components/ui";
+import { ExercisePicker } from "@/components/ExercisePicker";
+import { Button, Empty, Loading, SectionLabel } from "@/components/ui";
 import { muscleNames } from "@/lib/muscles";
 import { colors, TAP } from "@/lib/theme";
 
@@ -35,19 +32,14 @@ export default function RoutineScreen() {
   const router = useRouter();
 
   const [routine, setRoutine] = useState<RoutineDetail | null>(null);
-  const [available, setAvailable] = useState<ExerciseListItem[]>([]);
   const [name, setName] = useState("");
   const [picking, setPicking] = useState(false);
-  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const r = await getRoutine(store, id);
     setRoutine(r);
     setName((cur) => (cur.length === 0 ? (r?.name ?? "") : cur));
-
-    const gym = await getActiveGym(store);
-    if (gym) setAvailable(await listExercisesForGym(store, gym.id, null));
     setLoading(false);
   }, [store, id]);
 
@@ -113,11 +105,6 @@ export default function RoutineScreen() {
       </SafeAreaView>
     );
   }
-
-  const inPlan = new Set(routine.items.map((i) => i.exercise.id));
-  const pickable = available.filter(
-    (a) => !inPlan.has(a.exercise.id) && matchesQuery(a.exercise, query),
-  );
 
   return (
     <SafeAreaView className="flex-1 bg-bg" edges={["bottom", "left", "right"]}>
@@ -192,44 +179,6 @@ export default function RoutineScreen() {
           )}
         </View>
 
-        {picking ? (
-          <View className="mt-8">
-            <SectionLabel>Lägg till</SectionLabel>
-            <View className="mt-3">
-              <SearchField value={query} onChange={setQuery} />
-            </View>
-            {pickable.length === 0 ? (
-              <Text className="mt-3 text-[14px] text-muted">
-                {query
-                  ? `Ingen övning matchar "${query}".`
-                  : "Alla övningar på det aktiva gymmet ligger redan i planen."}
-              </Text>
-            ) : (
-              <View className="mt-3 gap-2">
-                {pickable.map((a) => (
-                  <Pressable
-                    key={a.exercise.id}
-                    onPress={() => add(a.exercise.id)}
-                    accessibilityRole="button"
-                    className="flex-row items-center gap-3 rounded-[15px] border border-line bg-card px-4 active:opacity-70"
-                    style={{ minHeight: 60 }}
-                  >
-                    <Feather name="plus" size={18} color={colors.accent} />
-                    <View className="flex-1">
-                      <Text className="text-[16px] text-ink" numberOfLines={1}>
-                        {a.exercise.name}
-                      </Text>
-                      <Text className="mt-0.5 text-[12.5px] text-muted" numberOfLines={1}>
-                        {[a.exercise.nameEn, a.machine?.manufacturer].filter(Boolean).join(" · ")}
-                      </Text>
-                    </View>
-                  </Pressable>
-                ))}
-              </View>
-            )}
-          </View>
-        ) : null}
-
         <Pressable
           onPress={confirmDelete}
           accessibilityRole="button"
@@ -244,12 +193,22 @@ export default function RoutineScreen() {
 
       <View className="border-t border-line px-4 pb-1 pt-3">
         <Button
-          label={picking ? "Klar med att lägga till" : "Lägg till övningar"}
-          icon={picking ? "check" : "plus"}
-          variant={picking ? "primary" : "secondary"}
-          onPress={() => setPicking((p) => !p)}
+          label="Lägg till övningar"
+          icon="plus"
+          variant="secondary"
+          onPress={() => setPicking(true)}
         />
       </View>
+
+      {/* Hela biblioteket, inte bara det aktiva gymmet: en plan har med flit
+          ingen gymkoppling — samma "Överkropp" ska gå att köra var som helst. */}
+      <ExercisePicker
+        open={picking}
+        title="Lägg till i planen"
+        exclude={routine.items.map((i) => i.exercise.id)}
+        onPick={add}
+        onClose={() => setPicking(false)}
+      />
     </SafeAreaView>
   );
 }

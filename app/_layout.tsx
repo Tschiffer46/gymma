@@ -47,6 +47,8 @@ function Gate() {
           tillbakaknappen. */}
       <Stack.Screen name="log/[exerciseId]" options={{ headerShown: false }} />
       <Stack.Screen name="session/end" options={{ ...header, title: "Avsluta pass" }} />
+      <Stack.Screen name="session/[id]" options={{ ...header, title: "Passet" }} />
+      <Stack.Screen name="sessions" options={{ ...header, title: "Träningspass" }} />
       <Stack.Screen name="routine/[id]" options={{ ...header, title: "Plan" }} />
       <Stack.Screen name="library" options={{ ...header, title: "Övningsbibliotek" }} />
       <Stack.Screen name="exercise/[id]" options={{ ...header, title: "Redigera övning" }} />

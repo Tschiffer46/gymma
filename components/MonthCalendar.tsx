@@ -4,20 +4,24 @@ import { WEEKDAYS_MONDAY_FIRST, dayKeyToDate, monthGrid, monthName, toDayKey } f
 import { colors, radius } from "@/lib/theme";
 
 /**
- * Månadskalender för att planera träningsdagar.
+ * Månadskalender, i två lägen.
  *
  * Byggd med vanliga `View` — ingen kalenderberoende. Ett rutnät på sju kolumner
  * är inte svårare än ett bibliotek att underhålla, och vi slipper ännu en
  * dependency i en app som redan brännts av beroendedrift.
  *
- * Dagar som passerat går inte att planera. Att planera bakåt säger ingenting
- * om vad du tänker göra, och skulle bara göra "nästa pass" tvetydigt.
+ * - **`plan`** (Planera): välj framtida träningsdagar. Passerade dagar går inte
+ *   att planera — att planera bakåt säger ingenting om vad du tänker göra.
+ * - **`history`** (Följ upp): tvärtom. Dagar du tränat går att öppna för att
+ *   läsa passet; framtiden finns inget att visa för.
  */
 export function MonthCalendar({
   year,
   month,
   planned,
   trained,
+  mode = "plan",
+  selected = null,
   onToggle,
   onChangeMonth,
 }: {
@@ -27,11 +31,15 @@ export function MonthCalendar({
   planned: Set<string>;
   /** 'YYYY-MM-DD' där ett pass faktiskt avslutades. */
   trained: Set<string>;
+  mode?: "plan" | "history";
+  /** Markerad dag i history-läget. */
+  selected?: string | null;
   onToggle: (day: string) => void;
   onChangeMonth: (year: number, month: number) => void;
 }) {
   const cells = monthGrid(year, month);
   const todayKey = toDayKey();
+  const history = mode === "history";
 
   function step(delta: number) {
     const d = new Date(year, month + delta, 1);
@@ -73,16 +81,24 @@ export function MonthCalendar({
           const didTrain = trained.has(day);
           const isToday = day === todayKey;
           const isPast = day < todayKey;
+          const isSelected = history && day === selected;
+
+          // Planera ser framåt, Följ upp bakåt. Samma rutnät, motsatt spärr.
+          const disabled = history ? !didTrain : isPast;
+          const faded = history ? !didTrain : isPast && !didTrain;
 
           return (
             <View key={day} style={{ width: `${100 / 7}%`, height: 46, padding: 2 }}>
               <Pressable
                 onPress={() => onToggle(day)}
-                disabled={isPast}
+                disabled={disabled}
                 accessibilityRole="button"
-                accessibilityState={{ selected: isPlanned, disabled: isPast }}
+                accessibilityState={{
+                  selected: history ? isSelected : isPlanned,
+                  disabled,
+                }}
                 accessibilityLabel={`${dayKeyToDate(day).getDate()} ${monthName(month)}${
-                  isPlanned ? ", planerad" : ""
+                  isPlanned && !history ? ", planerad" : ""
                 }${didTrain ? ", tränad" : ""}`}
                 className="flex-1 items-center justify-center active:opacity-70"
                 style={{
@@ -92,9 +108,13 @@ export function MonthCalendar({
                     : isPlanned
                       ? colors.accentSoft
                       : "transparent",
-                  borderWidth: isPlanned && !didTrain ? 1 : isToday ? 1 : 0,
-                  borderColor: isPlanned ? colors.accent : colors.line,
-                  opacity: isPast && !didTrain ? 0.35 : 1,
+                  borderWidth: isSelected ? 2 : isPlanned && !didTrain ? 1 : isToday ? 1 : 0,
+                  borderColor: isSelected
+                    ? colors.accent
+                    : isPlanned
+                      ? colors.accent
+                      : colors.line,
+                  opacity: faded ? 0.35 : 1,
                 }}
               >
                 <Text
