@@ -49,8 +49,8 @@ app/
 ├── library.tsx            Övningsbibliotek med sök (nås från Inställningar)
 ├── exercise/new.tsx       Lägg till övning/maskin → direkt in i loggvyn
 └── exercise/[id].tsx      Redigera övning: namn, engelskt namn, viktenhet, steg
-components/  ui.tsx (Card/Button/Chip/StatTile/NumberPrompt/Empty/Loading/SearchField)
-             · ExerciseRow.tsx · ExercisePicker.tsx (hela biblioteket) · SwipeRow.tsx
+components/  ui.tsx (Card/Button/Chip/IconButton/StatTile/NumberPrompt/Empty/Loading/SearchField)
+             · ExerciseRow.tsx · ExercisePicker.tsx (hela biblioteket)
              · WeekRing.tsx (SVG) · FillBar.tsx · StartSheet.tsx · MonthCalendar.tsx
 lib/
 ├── theme.ts    mörka tokens + TAP (minsta tryckyta)
@@ -372,6 +372,20 @@ telefonen. Testa den så här:
   Fungerande kombination: `nativewind@4.1.23` + `react-native-css-interop@0.1.22` (samma som
   `laga-app` faktiskt skickar i produktion). Obs: `laga-app` deklarerar fortfarande caret och
   räddas bara av sitt package-lock — en ren ominstallation där skulle gå i samma fälla.
+- **`ReanimatedSwipeable` KRASCHAR appen. Använd den inte.** Uppmätt 2026-08-04: svep-att-radera
+  gick ut som OTA och dödade appen vid första svepet. `ReanimatedSwipeable` i
+  `react-native-gesture-handler` 2.31.2 är Reanimated **3**-kod — elva `'worklet'`-direktiv plus
+  `measure`, `runOnUI` och globalen `_WORKLET` — medan vi kör Reanimated **4.3.1**, som var en
+  omskrivning. RNGH deklarerar **ingen peer dependency på reanimated alls**, så varken npm eller
+  EAS kontrollerar kombinationen. Metro laddar dessutom subpathen som rå TS-källa ur `src/`.
+  Uteslutet som orsak: babel-pipelinen (worklets-pluginet läggs in automatiskt av
+  `babel-preset-expo`), saknad `_WORKLET` (finns i worklets 0.8.3) och saknad native-modul
+  (gesture-handler har följt med varje bygge sedan Sprint 1).
+  **Appen kör därför medvetet ingen gestkod.** `GestureHandlerRootView` i `app/_layout.tsx`
+  finns för navigationens skull, inget annat. Radåtgärder är synliga `IconButton`-tryckytor —
+  samma beslut som för drag-and-drop i planredigeraren. Vill någon ändå ha svep finns den äldre
+  `Swipeable` i samma paket (noll worklets, ren RN `Animated`) — men den MÅSTE köras i
+  iOS-simulatorn först. Det här är andra gången ett otestat körtidsberoende kostat en release.
 - **`.npmrc` med `legacy-peer-deps=true` krävs** för att `npm ci` ska gå igenom på EAS.
 - **`declare module "*.css";`** måste finnas i `nativewind-env.d.ts`, annars klagar `tsc` på
   `import "../global.css"`.
@@ -414,9 +428,9 @@ telefonen. Testa den så här:
   snittet av de senaste sex månaderna. Nya aggregat: `listTopGyms`, `listTopRoutines`,
   `listPlannedDayPlans`, `setPlannedDayRoutine`, `plannedRoutineForDay`, `monthlyTotals`.
 - **Loggboken** ✅ Passhistorik som går att rätta: `app/sessions.tsx` (nås från Inställningar)
-  och `app/session/[id].tsx`, svep åt vänster via `components/SwipeRow.tsx`
-  (`ReanimatedSwipeable` — redan installerad gesture-handler, ingen ny modul). Kalendern i
-  Följ upp visar tränade dagar och passets sammanfattning **inklusive kommentaren**.
+  och `app/session/[id].tsx`. Kalendern i Följ upp visar tränade dagar och passets
+  sammanfattning **inklusive kommentaren**. (Första försöket hade svep-att-radera; det
+  kraschade appen och är borttaget — se `ReanimatedSwipeable` under Gotchas.)
   Samtidigt: gym-buggen (se "viktskalor" ovan), "Lägg till övning" mitt i ett planerat pass,
   viktsteg 1 kg och tryckbara siffror i loggvyn.
 - **Nästa** — nästa-kort under passet (lätt version av 1c: tydligt kort överst, **utan** den
