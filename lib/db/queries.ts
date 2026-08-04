@@ -18,6 +18,8 @@ import type {
   RoutineSummary,
   RoutineUsage,
   Session,
+  SessionExerciseGroup,
+  SessionSummary,
   SetEntry,
   WeightUnit,
 } from "./types";
@@ -456,6 +458,38 @@ export async function createMachine(
     ],
   );
   return id;
+}
+
+/**
+ * Maskinen på det här gymmet — skapas om den inte finns.
+ *
+ * Det här är vad som gör att en övning aldrig kan "saknas" på ett gym. Tidigare
+ * doldes en maskinövning helt på gym där ingen `machine`-rad fanns, och enda
+ * vägen in var att skriva namnet på nytt under "Ny övning eller maskin".
+ *
+ * Designprincip 4 säger att maskiner läggs till **när de används**, inte i
+ * förväg — så raden skapas vid första loggade setet. Progressionen mäts
+ * fortfarande per maskin, eftersom raden hör till just det här gymmet: 50 kg på
+ * en bröstpress är inte 50 kg på en annan.
+ */
+export async function getOrCreateMachine(
+  store: Store,
+  exerciseId: string,
+  gymId: string,
+  weightStep: number,
+): Promise<Machine> {
+  const existing = await getMachine(store, exerciseId, gymId);
+  if (existing) return existing;
+
+  const id = await createMachine(store, { gymId, exerciseId, weightStep });
+  const created = await store.db.getFirstAsync<MachineRow>(
+    "SELECT * FROM machine WHERE id = ?",
+    [id],
+  );
+  // Raden skapades precis; skulle den mot förmodan saknas är det ett skrivfel
+  // och då är det bättre att smälla här än att logga set mot ingenting.
+  if (!created) throw new Error("Maskinen kunde inte skapas");
+  return toMachine(created);
 }
 
 export async function updateMachine(
@@ -960,6 +994,223 @@ export async function sessionVolumeKg({ db }: Store, sessionId: string): Promise
     [sessionId],
   );
   return row?.v ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Passhistorik
+//
+// Ligger efter volymavsnittet med flit: sammanfattningen återanvänder
+// VOLUME_SUM, som är en `const` och därför måste vara initierad först.
+// ---------------------------------------------------------------------------
+
+type SessionSummaryRow = SessionRow & {
+  gym_name: string;
+  routine_name: string | null;
+  n_sets: number;
+  n_ex: number;
+  volume: number | null;
+};
+
+/**
+ * Historiken visar bara **avslutade** pass. Ett pågående pass hör hemma i
+ * Gymma-fliken, inte i loggboken.
+ */
+const SESSION_SUMMARY_SELECT = `
+  SELECT s.*, g.name AS gym_name, r.name AS routine_name,
+         (SELECT COUNT(*) FROM set_entry se
+          WHERE se.session_id = s.id AND se.deleted_at IS NULL) AS n_sets,
+         (SELECT COUNT(DISTINCT se.exercise_id) FROM set_entry se
+          WHERE se.session_id = s.id AND se.deleted_at IS NULL) AS n_ex,
+         (SELECT ${VOLUME_SUM} FROM set_entry se
+          JOIN exercise e ON e.id = se.exercise_id
+          WHERE se.session_id = s.id AND se.deleted_at IS NULL) AS volume
+  FROM session s
+  JOIN gym g ON g.id = s.gym_id
+  LEFT JOIN routine r ON r.id = s.routine_id AND r.deleted_at IS NULL
+  WHERE s.deleted_at IS NULL AND s.ended_at IS NOT NULL`;
+
+const toSessionSummary = (r: SessionSummaryRow): SessionSummary => ({
+  id: r.id,
+  gymId: r.gym_id,
+  gymName: r.gym_name,
+  // Raderad plan ⇒ ingen dinglande referens, samma regel som planerade dagar.
+  routineId: r.routine_name === null ? null : r.routine_id,
+  routineName: r.routine_name,
+  startedAt: r.started_at,
+  endedAt: r.ended_at as string,
+  feeling: (r.feeling as Feeling | null) ?? null,
+  notes: r.notes,
+  sets: r.n_sets,
+  volumeKg: r.volume ?? 0,
+  exercises: r.n_ex,
+});
+
+/** Hela loggboken, nyast först. */
+export async function listSessions(
+  { db }: Store,
+  limit = 100,
+  offset = 0,
+): Promise<SessionSummary[]> {
+  const rows = await db.getAllAsync<SessionSummaryRow>(
+    `${SESSION_SUMMARY_SELECT} ORDER BY s.ended_at DESC LIMIT ? OFFSET ?`,
+    [limit, offset],
+  );
+  return rows.map(toSessionSummary);
+}
+
+/**
+ * Passen en viss kalenderdag — driver kalendern i Följ upp.
+ *
+ * `'localtime'` som överallt annars: `ended_at` ligger i UTC, och ett pass som
+ * avslutas 00:30 svensk sommartid hör till den dagen, inte till dagen innan.
+ */
+export async function sessionsOnDay({ db }: Store, day: string): Promise<SessionSummary[]> {
+  const rows = await db.getAllAsync<SessionSummaryRow>(
+    `${SESSION_SUMMARY_SELECT} AND date(s.ended_at, 'localtime') = ?
+     ORDER BY s.ended_at ASC`,
+    [day],
+  );
+  return rows.map(toSessionSummary);
+}
+
+export async function getSessionSummary({ db }: Store, id: string): Promise<SessionSummary | null> {
+  const row = await db.getFirstAsync<SessionSummaryRow>(
+    `${SESSION_SUMMARY_SELECT} AND s.id = ?`,
+    [id],
+  );
+  return row ? toSessionSummary(row) : null;
+}
+
+/**
+ * Passets set samlade per övning, i den ordning övningarna kördes.
+ *
+ * Övningarna slås upp **utan** filter på `deleted_at`: raderar man en övning ur
+ * biblioteket i efterhand ska historiken ändå kunna visa vad man faktiskt
+ * gjorde. Att tömma gamla pass vore att skriva om historien.
+ */
+export async function sessionExerciseGroups(
+  { db }: Store,
+  sessionId: string,
+): Promise<SessionExerciseGroup[]> {
+  const rows = await db.getAllAsync<SetRow>(
+    `SELECT * FROM set_entry
+     WHERE session_id = ? AND deleted_at IS NULL
+     ORDER BY logged_at ASC, set_index ASC`,
+    [sessionId],
+  );
+  if (rows.length === 0) return [];
+
+  const exerciseIds = [...new Set(rows.map((r) => r.exercise_id))];
+  const machineIds = [...new Set(rows.map((r) => r.machine_id))].filter(
+    (id): id is string => id !== null,
+  );
+
+  const exercises = await db.getAllAsync<ExerciseRow>(
+    `SELECT * FROM exercise WHERE id IN (${exerciseIds.map(() => "?").join(",")})`,
+    exerciseIds,
+  );
+  const machines = machineIds.length
+    ? await db.getAllAsync<MachineRow>(
+        `SELECT * FROM machine WHERE id IN (${machineIds.map(() => "?").join(",")})`,
+        machineIds,
+      )
+    : [];
+
+  const exById = new Map(exercises.map((r) => [r.id, toExercise(r)]));
+  const mById = new Map(machines.map((r) => [r.id, toMachine(r)]));
+
+  const groups: SessionExerciseGroup[] = [];
+  for (const r of rows) {
+    const exercise = exById.get(r.exercise_id);
+    if (!exercise) continue;
+
+    let group = groups.find((g) => g.exercise.id === r.exercise_id);
+    if (!group) {
+      group = {
+        exercise,
+        machine: r.machine_id ? (mById.get(r.machine_id) ?? null) : null,
+        sets: [],
+      };
+      groups.push(group);
+    }
+    group.sets.push(toSet(r));
+  }
+  return groups;
+}
+
+/** Rätta känsla eller kommentar i efterhand. */
+export async function updateSession(
+  { db, now }: Store,
+  sessionId: string,
+  patch: { feeling?: Feeling | null; notes?: string | null },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (patch.feeling !== undefined) {
+    sets.push("feeling = ?");
+    params.push(patch.feeling);
+  }
+  if (patch.notes !== undefined) {
+    sets.push("notes = ?");
+    params.push(patch.notes?.trim() || null);
+  }
+  if (sets.length === 0) return;
+
+  sets.push("updated_at = ?");
+  params.push(now(), sessionId);
+  await db.runAsync(`UPDATE session SET ${sets.join(", ")} WHERE id = ?`, params);
+}
+
+/**
+ * Raderar ett helt pass.
+ *
+ * **Seten MÅSTE mjukraderas med.** `lastSets`, `bestWeightOnMachine`,
+ * `recentPbs` och `listExercisesForGym` filtrerar bara på
+ * `set_entry.deleted_at` och joinar aldrig `session` — lämnas seten kvar skulle
+ * ett raderat pass fortsätta styra förifyllningen och dina rekord. Felet vore
+ * dessutom lömskt: `weekSummary` och `monthlyTotals` joinar session och hade
+ * sett helt rätt ut medan loggvyn ljög.
+ */
+export async function deleteSession({ db, now }: Store, sessionId: string): Promise<void> {
+  const t = now();
+  await db.runAsync("UPDATE session SET deleted_at = ?, updated_at = ? WHERE id = ?", [
+    t,
+    t,
+    sessionId,
+  ]);
+  await db.runAsync(
+    "UPDATE set_entry SET deleted_at = ?, updated_at = ? WHERE session_id = ? AND deleted_at IS NULL",
+    [t, t, sessionId],
+  );
+  await db.runAsync(
+    "UPDATE session_skip SET deleted_at = ?, updated_at = ? WHERE session_id = ? AND deleted_at IS NULL",
+    [t, t, sessionId],
+  );
+}
+
+/** Rätta vikt eller reps på ett loggat set. Volymen räknas om, den lagras inte. */
+export async function updateSet(
+  { db, now }: Store,
+  setId: string,
+  patch: { weightKg?: number; reps?: number },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (patch.weightKg !== undefined) {
+    sets.push("weight_kg = ?");
+    params.push(patch.weightKg);
+  }
+  if (patch.reps !== undefined) {
+    sets.push("reps = ?");
+    params.push(patch.reps);
+  }
+  if (sets.length === 0) return;
+
+  sets.push("updated_at = ?");
+  params.push(now(), setId);
+  await db.runAsync(`UPDATE set_entry SET ${sets.join(", ")} WHERE id = ?`, params);
 }
 
 // ---------------------------------------------------------------------------

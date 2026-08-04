@@ -19,6 +19,7 @@ import {
   getCurrentSession,
   getExercise,
   getMachine,
+  getOrCreateMachine,
   getOrOpenSession,
   lastSets,
   logSet,
@@ -31,12 +32,16 @@ import {
   type Session,
   type SetEntry,
 } from "@/lib/db";
-import { Loading } from "@/components/ui";
+import { Loading, NumberPrompt } from "@/components/ui";
 import { fmtWeight, weightUnitLabel } from "@/lib/format";
 import { colors, radius, tint } from "@/lib/theme";
 
-/** Viktmagasin går i olika steg. Tre val räcker och slipper tangentbordet. */
-const STEP_OPTIONS = [2.5, 5, 10];
+/**
+ * Viktmagasin går i olika steg. 1 kg först — det är det finaste steget och
+ * fungerar överallt; magasin som bara går i 5 kg väljer man ett tryck bort.
+ * Behöver du hoppa långt trycker du i stället på själva siffran och skriver.
+ */
+const STEP_OPTIONS = [1, 2.5, 5, 10];
 
 /** Antal set att visa pips för när övningen aldrig körts förut. */
 const DEFAULT_PLANNED_SETS = 3;
@@ -94,6 +99,7 @@ export default function LogScreen() {
   const [step, setStep] = useState(5);
   const [flash, setFlash] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
+  const [typing, setTyping] = useState<"weight" | "reps" | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -164,11 +170,22 @@ export default function LogScreen() {
       if (!gym) return;
       // Passet öppnas här som skyddsnät — normalt finns det redan.
       const s = session ?? (await getOrOpenSession(store, gym.id));
+
+      // Maskiner läggs till NÄR de används, inte i förväg (designprincip 4).
+      // Kör du en maskinövning på ett gym där den aldrig använts skapas raden
+      // här — det är vad som gör att en övning aldrig kan "saknas" på ett gym.
+      const target =
+        machine ??
+        (exercise.type === "machine"
+          ? await getOrCreateMachine(store, exercise.id, gym.id, step)
+          : null);
+      if (target && !machine) setMachine(target);
+
       const index = sets.length + 1;
       const entry = await logSet(store, {
         sessionId: s.id,
         exerciseId: exercise.id,
-        machineId: machine?.id ?? null,
+        machineId: target?.id ?? null,
         weightKg: weight,
         reps,
         setIndex: index,
@@ -201,7 +218,7 @@ export default function LogScreen() {
     } finally {
       setBusy(false);
     }
-  }, [exercise, machine, session, sets, prev, weight, reps, best, store, busy, popScale, popOpacity]);
+  }, [exercise, machine, session, sets, prev, weight, reps, step, best, store, busy, popScale, popOpacity]);
 
   async function undoLast() {
     const last = sets[sets.length - 1];
@@ -312,28 +329,43 @@ export default function LogScreen() {
           Set {nextIndex} av {pipTotal}
         </Text>
 
-        <Animated.View
-          style={[popStyle, { flexDirection: "row", alignItems: "baseline", marginTop: 6 }]}
+        {/* Siffrorna är tryckytor: ett tryck öppnar tangentbordet för dem som
+            ska hoppa långt. +/– nedanför är fortfarande huvudvägen. */}
+        <Pressable
+          onPress={() => setTyping("weight")}
+          accessibilityRole="button"
+          accessibilityLabel={`Vikt ${fmtWeight(weight)} ${unit}. Tryck för att skriva in.`}
+          className="active:opacity-70"
         >
-          <Text
-            style={{
-              fontSize: 96,
-              fontWeight: "700",
-              letterSpacing: -4,
-              color: colors.ink,
-              fontVariant: ["tabular-nums"],
-            }}
+          <Animated.View
+            style={[popStyle, { flexDirection: "row", alignItems: "baseline", marginTop: 6 }]}
           >
-            {fmtWeight(weight)}
-          </Text>
-          <Text
-            style={{ fontSize: 22, fontWeight: "600", color: colors.muted, marginLeft: 8 }}
-          >
-            {unit}
-          </Text>
-        </Animated.View>
+            <Text
+              style={{
+                fontSize: 96,
+                fontWeight: "700",
+                letterSpacing: -4,
+                color: colors.ink,
+                fontVariant: ["tabular-nums"],
+              }}
+            >
+              {fmtWeight(weight)}
+            </Text>
+            <Text
+              style={{ fontSize: 22, fontWeight: "600", color: colors.muted, marginLeft: 8 }}
+            >
+              {unit}
+            </Text>
+          </Animated.View>
+        </Pressable>
 
-        <View style={{ flexDirection: "row", alignItems: "baseline", marginTop: 20 }}>
+        <Pressable
+          onPress={() => setTyping("reps")}
+          accessibilityRole="button"
+          accessibilityLabel={`${reps} reps. Tryck för att skriva in.`}
+          className="flex-row items-baseline active:opacity-70"
+          style={{ marginTop: 20 }}
+        >
           <Text
             style={{
               fontSize: 42,
@@ -348,7 +380,7 @@ export default function LogScreen() {
           <Text style={{ fontSize: 16, fontWeight: "600", color: colors.muted, marginLeft: 7 }}>
             reps
           </Text>
-        </View>
+        </Pressable>
 
         <Text
           style={{ fontSize: 13.5, color: colors.muted, marginTop: 26, textAlign: "center" }}
@@ -491,6 +523,31 @@ export default function LogScreen() {
       </View>
 
       {flash ? <Toast text={flash} /> : null}
+
+      <NumberPrompt
+        open={typing === "weight"}
+        title="Vikt"
+        unit={unit}
+        value={weight}
+        decimals
+        onSubmit={(next) => {
+          setWeight(next);
+          setTyping(null);
+        }}
+        onClose={() => setTyping(null)}
+      />
+      <NumberPrompt
+        open={typing === "reps"}
+        title="Reps"
+        unit="reps"
+        value={reps}
+        min={1}
+        onSubmit={(next) => {
+          setReps(Math.round(next));
+          setTyping(null);
+        }}
+        onClose={() => setTyping(null)}
+      />
     </SafeAreaView>
   );
 }

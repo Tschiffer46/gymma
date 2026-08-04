@@ -144,6 +144,35 @@ export type SetEntry = Timestamps & {
 };
 
 /**
+ * Ett avslutat pass som det visas i historiken.
+ *
+ * Gym- och plannamn följer med från joinen så listan aldrig behöver ett anrop
+ * per rad. En raderad plan ger `routineName: null` — samma regel som
+ * `listPlannedDayPlans`: hellre passlös än en dinglande referens.
+ */
+export type SessionSummary = {
+  id: string;
+  gymId: string;
+  gymName: string;
+  routineId: string | null;
+  routineName: string | null;
+  startedAt: string;
+  endedAt: string;
+  feeling: Feeling | null;
+  notes: string | null;
+  sets: number;
+  volumeKg: number;
+  exercises: number;
+};
+
+/** Passets set samlade per övning, i den ordning övningarna kördes. */
+export type SessionExerciseGroup = {
+  exercise: Exercise;
+  machine: Machine | null;
+  sets: SetEntry[];
+};
+
+/**
  * En rad i startskärmens avbockningslista: övningen plus det appen behöver
  * visa utan ett extra anrop per rad.
  */

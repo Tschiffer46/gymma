@@ -32,6 +32,7 @@ import {
   type RoutineSummary,
   type Session,
 } from "@/lib/db";
+import { ExercisePicker } from "@/components/ExercisePicker";
 import { ExerciseRow } from "@/components/ExerciseRow";
 import { StartSheet } from "@/components/StartSheet";
 import { WeekRing } from "@/components/WeekRing";
@@ -373,6 +374,7 @@ function ActiveSession({ session }: { session: Session }) {
   const [planIds, setPlanIds] = useState<string[]>([]);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [showAll, setShowAll] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState("");
   const [sets, setSets] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -419,8 +421,17 @@ function ActiveSession({ session }: { session: Session }) {
   const byId = new Map(items.map((i) => [i.exercise.id, i]));
   const skippedSet = new Set(skipped);
 
+  // Övningar man loggat utanför planen ligger kvar i Planen-fliken. Utan det
+  // skulle ett set man precis loggat se ut att ha försvunnit så fort man
+  // bytte tillbaka. Härleds ur datan — `doneToday` betyder "har set i det här
+  // passet" — så det överlever att appen dödas mitt i passet.
+  const extras = items.filter((i) => i.doneToday && !planIds.includes(i.exercise.id));
+
   const ordered = inPlanMode
-    ? planIds.map((pid) => byId.get(pid)).filter((i): i is ExerciseListItem => !!i)
+    ? [
+        ...planIds.map((pid) => byId.get(pid)).filter((i): i is ExerciseListItem => !!i),
+        ...extras,
+      ]
     : items;
 
   // Överhoppade sjunker till botten i stället för att försvinna, så det går att
@@ -428,6 +439,14 @@ function ActiveSession({ session }: { session: Session }) {
   const visible = [...ordered]
     .filter((i) => matchesQuery(i.exercise, query))
     .sort((a, b) => Number(skippedSet.has(a.exercise.id)) - Number(skippedSet.has(b.exercise.id)));
+
+  // Vad väljaren ska dölja beror på läget, och får ALDRIG bero på sökfältet —
+  // annars dyker redan valda övningar upp igen så fort man söker.
+  // I planläget är poängen att nå det som inte står i planen; i hela listan är
+  // poängen att nå det som inte finns på det här gymmet.
+  const pickerExclude = inPlanMode
+    ? [...planIds, ...extras.map((i) => i.exercise.id)]
+    : items.map((i) => i.exercise.id);
 
   // Överhoppade räknas som avklarade i "3/5 i planen" — annars ser planen
   // aldrig färdig ut trots att man är klar för dagen.
@@ -526,12 +545,30 @@ function ActiveSession({ session }: { session: Session }) {
       {/* Tumzonen: den enda knappen som inte är en övning ligger längst ned. */}
       <View className="border-t border-line px-4 pb-2 pt-3">
         <Button
-          label="Ny övning eller maskin"
+          label="Lägg till övning"
           icon="plus"
           variant="secondary"
-          onPress={() => router.push("/exercise/new")}
+          onPress={() => setPicking(true)}
         />
       </View>
+
+      {/* Väljaren når HELA biblioteket, inte bara det här gymmet. Det är både
+          hur man avviker från planen och hur man kommer åt en maskin som
+          aldrig använts här — den skapas på gymmet vid första loggade setet. */}
+      <ExercisePicker
+        open={picking}
+        title={inPlanMode ? "Lägg till i passet" : "Lägg till övning"}
+        exclude={pickerExclude}
+        onPick={(id) => {
+          setPicking(false);
+          router.push({ pathname: "/log/[exerciseId]", params: { exerciseId: id } });
+        }}
+        onCreateNew={() => {
+          setPicking(false);
+          router.push("/exercise/new");
+        }}
+        onClose={() => setPicking(false)}
+      />
     </SafeAreaView>
   );
 }

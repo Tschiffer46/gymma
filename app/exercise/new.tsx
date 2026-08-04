@@ -17,7 +17,7 @@ import { Button, Chip, SectionLabel } from "@/components/ui";
 import { fmtWeight } from "@/lib/format";
 import { colors } from "@/lib/theme";
 
-const STEP_OPTIONS = [2.5, 5, 10];
+const STEP_OPTIONS = [1, 2.5, 5, 10];
 
 /**
  * Lägg till en övning eller maskin.
@@ -38,7 +38,7 @@ export default function NewExerciseScreen() {
   const [nameEn, setNameEn] = useState("");
   const [type, setType] = useState<ExerciseType>("machine");
   const [weightUnit, setWeightUnit] = useState<WeightUnit>("total");
-  const [step, setStep] = useState(5);
+  const [step, setStep] = useState(1);
   const [manufacturer, setManufacturer] = useState("");
   const [seatSettings, setSeatSettings] = useState("");
   const [saving, setSaving] = useState(false);
@@ -66,15 +66,11 @@ export default function NewExerciseScreen() {
 
   function pickType(next: ExerciseType) {
     setType(next);
-    // Maskiner har alltid ett viktmagasin med totalvikt; steget är oftast 5 kg.
-    // Fria vikter går oftare i 2,5 och är oftast hantlar.
-    if (next === "machine") {
-      setWeightUnit("total");
-      setStep(5);
-    } else {
-      setWeightUnit("per_hand");
-      setStep(2.5);
-    }
+    // Maskiner har alltid ett viktmagasin med totalvikt, fria vikter är oftast
+    // hantlar. Steget lämnas på 1 kg för båda — grövre steg väljer man när man
+    // ser magasinet, och valet sparas per maskin därifrån.
+    setWeightUnit(next === "machine" ? "total" : "per_hand");
+    setStep(1);
   }
 
   async function save() {

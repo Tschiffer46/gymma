@@ -28,13 +28,13 @@ export function ExerciseRow({
 
   const subtitle = lastSets.length > 0 ? formatSets(lastSets, perHand) : "Inte loggad än";
 
-  // En maskinövning utan maskin på det här gymmet kommer från en plan. Säg det
-  // rakt ut i stället för att låta raden se tom ut — annars ser det ut som en
-  // bugg när viktsteget och progressionen inte hör ihop med någon maskin.
-  const elsewhere = exercise.type === "machine" && !machine;
+  // En maskinövning som aldrig använts på det här gymmet saknar `machine`-rad.
+  // Det är inget fel: raden skapas vid första loggade setet (designprincip 4 —
+  // maskiner läggs till när de används). Säg det lugnt, inte i rött.
+  const newHere = exercise.type === "machine" && !machine;
 
-  const meta = elsewhere
-    ? "Finns inte på det här gymmet"
+  const meta = newHere
+    ? "Ny här — läggs till när du loggar"
     : [machine?.manufacturer, lastPerformedAt ? relativeDay(lastPerformedAt) : null]
         .filter(Boolean)
         .join(" · ");
@@ -88,11 +88,7 @@ export function ExerciseRow({
             {skipped ? "Överhoppad i det här passet" : subtitle}
           </Text>
           {meta && !skipped ? (
-            <Text
-              className="mt-0.5 text-[12px]"
-              style={{ color: elsewhere ? colors.danger : colors.muted }}
-              numberOfLines={1}
-            >
+            <Text className="mt-0.5 text-[12px] text-muted" numberOfLines={1}>
               {meta}
             </Text>
           ) : null}
