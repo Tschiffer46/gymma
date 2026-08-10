@@ -26,7 +26,7 @@ import {
   SectionLabel,
 } from "@/components/ui";
 import { describeDay, toDayKey } from "@/lib/dates";
-import { fmtVolume, fmtWeight, weightUnitLabel } from "@/lib/format";
+import { capitalize, fmtVolume, fmtWeight, weightUnitLabel } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
 
 const FEELINGS: { key: Feeling; label: string; icon: keyof typeof Feather.glyphMap }[] = [
@@ -34,8 +34,6 @@ const FEELINGS: { key: Feeling; label: string; icon: keyof typeof Feather.glyphM
   { key: "lagom", label: "Lagom", icon: "check-circle" },
   { key: "tungt", label: "Tungt", icon: "alert-circle" },
 ];
-
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Ett tal som går att rätta. Ramen är hela poängen — den säger "tryck här". */
 function NumberChip({

@@ -40,6 +40,22 @@ export function fmtVolume(kg: number): string {
   return `${fmtWeight(Math.round(kg / 100) / 10)} t`;
 }
 
+/** "torsdag 7 augusti" → "Torsdag 7 augusti" — rubrikversionen av describeDay. */
+export function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+const FEELING_LABELS: Record<string, string> = {
+  latt: "Lätt",
+  lagom: "Lagom",
+  tungt: "Tungt",
+};
+
+/** Visningsnamnet för en känsla. Null/okänt ger tom sträng så den kan filtreras bort. */
+export function feelingLabel(feeling: string | null): string {
+  return feeling ? (FEELING_LABELS[feeling] ?? "") : "";
+}
+
 const NUMBER_WORDS = ["noll", "ett", "två", "tre", "fyra", "fem", "sex", "sju", "åtta", "nio", "tio"];
 
 /** "tre" i stället för "3" — läsbarare i löpande text. */

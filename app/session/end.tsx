@@ -6,7 +6,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import {
   endSession,
-  getCurrentSession,
+  getOpenSession,
   listGymsByRecentUse,
   sessionSetCount,
   useStore,
@@ -43,15 +43,12 @@ export default function EndSessionScreen() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const gyms = await listGymsByRecentUse(store);
-    for (const g of gyms) {
-      const s = await getCurrentSession(store, g.id);
-      if (s) {
-        setSession(s);
-        setGymName(g.name);
-        setSets(await sessionSetCount(store, s.id));
-        break;
-      }
+    const s = await getOpenSession(store);
+    if (s) {
+      const gyms = await listGymsByRecentUse(store);
+      setSession(s);
+      setGymName(gyms.find((g) => g.id === s.gymId)?.name ?? "");
+      setSets(await sessionSetCount(store, s.id));
     }
     setLoading(false);
   }, [store]);

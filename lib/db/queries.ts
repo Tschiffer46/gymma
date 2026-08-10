@@ -563,6 +563,25 @@ export async function getCurrentSession({ db, now }: Store, gymId: string): Prom
 }
 
 /**
+ * Det öppna passet oavsett gym — det kan bara finnas ett.
+ *
+ * Startskärmen och avsluta-vyn loopade tidigare alla gym och frågade
+ * `getCurrentSession` per gym; det här är samma svar i en enda query.
+ * `getOrOpenSession` (loggningsvägen) behåller med flit den gym-specifika
+ * varianten — dess semantik är ett skyddsnät och ska inte röras.
+ */
+export async function getOpenSession({ db, now }: Store): Promise<Session | null> {
+  const cutoff = new Date(Date.parse(now()) - SESSION_WINDOW_HOURS * 3600_000).toISOString();
+  const row = await db.getFirstAsync<SessionRow>(
+    `SELECT * FROM session
+     WHERE ended_at IS NULL AND deleted_at IS NULL AND started_at >= ?
+     ORDER BY started_at DESC LIMIT 1`,
+    [cutoff],
+  );
+  return row ? toSession(row) : null;
+}
+
+/**
  * Stänger allt som fortfarande står öppet.
  *
  * Sluttiden sätts till sista loggade setet, inte till nu, så gamla glömda pass

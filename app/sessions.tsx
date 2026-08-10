@@ -6,16 +6,8 @@ import { Feather } from "@expo/vector-icons";
 import { deleteSession, listSessions, useStore, type SessionSummary } from "@/lib/db";
 import { Empty, IconButton, Loading, SectionLabel } from "@/components/ui";
 import { describeDay, describeMonth, toDayKey, toMonthKey } from "@/lib/dates";
-import { fmtVolume } from "@/lib/format";
+import { capitalize, feelingLabel, fmtVolume } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
-
-const FEELING_LABEL: Record<string, string> = {
-  latt: "Lätt",
-  lagom: "Lagom",
-  tungt: "Tungt",
-};
-
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * Loggboken — alla avslutade pass, nyast först.
@@ -113,7 +105,7 @@ export default function SessionsScreen() {
                             {capitalize(describeDay(toDayKey(new Date(s.endedAt))))}
                           </Text>
                           <Text className="mt-0.5 text-[13px] text-muted" numberOfLines={1}>
-                            {[s.gymName, s.routineName, FEELING_LABEL[s.feeling ?? ""]]
+                            {[s.gymName, s.routineName, feelingLabel(s.feeling)]
                               .filter(Boolean)
                               .join(" · ")}
                           </Text>
