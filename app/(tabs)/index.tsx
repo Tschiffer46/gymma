@@ -7,7 +7,7 @@ import * as Haptics from "expo-haptics";
 import {
   averageSessionMinutes,
   createGym,
-  getCurrentSession,
+  getOpenSession,
   getRoutine,
   listPlannedDays,
   listTopGyms,
@@ -63,18 +63,8 @@ export default function GymmaScreen() {
   const [reloadKey, setReloadKey] = useState(0);
 
   const load = useCallback(async () => {
-    const gyms = await listGymsByRecentUse(store);
-    // Ett pass kan bara vara öppet på ett gym i taget, men vi vet inte vilket
-    // förrän vi frågat — leta igenom dem alla.
-    let open: Session | null = null;
-    for (const g of gyms) {
-      const s = await getCurrentSession(store, g.id);
-      if (s) {
-        open = s;
-        break;
-      }
-    }
-    setSession(open);
+    // Ett pass kan bara vara öppet på ett gym i taget — en query räcker.
+    setSession(await getOpenSession(store));
     setLoading(false);
   }, [store]);
 

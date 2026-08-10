@@ -1018,6 +1018,50 @@ async function main() {
   );
   eq(await core.normaliseWeightSteps(hstore), 0, "en färsk databas har inget att justera");
 
+  console.log("Öppet pass oavsett gym");
+  // Ersätter gym-loopen i startvyn och avsluta-vyn: ett pass kan bara vara
+  // öppet på ett gym i taget, så en enda query ska ge samma svar.
+  const odb = new DatabaseSync(":memory:");
+  let oclock = Date.parse("2026-08-20T09:00:00.000Z");
+  const ostore = { db: adapter(odb), uuid: randomUUID, now: () => new Date(oclock).toISOString() };
+  await core.initStore(ostore);
+
+  const ogyms = await q.listGyms(ostore);
+  const obar = (await q.findExerciseByName(ostore, "Bänkpress")).id;
+
+  eq(await q.getOpenSession(ostore), null, "utan pass finns inget öppet");
+
+  // Öppna passet på det ANDRA gymmet — loopen hittade det bara genom att leta.
+  const o1 = await q.startSession(ostore, ogyms[1].id);
+  eq((await q.getOpenSession(ostore)).id, o1.id, "det öppna passet hittas oavsett vilket gym");
+  eq(
+    (await q.getOpenSession(ostore)).gymId,
+    ogyms[1].id,
+    "och bär med sig sitt gym, så vyn kan visa rätt namn",
+  );
+
+  await q.logSet(ostore, {
+    sessionId: o1.id, exerciseId: obar, machineId: null, weightKg: 60, reps: 10, setIndex: 1,
+  });
+  oclock += 40 * 60_000;
+  await q.endSession(ostore, o1.id, { feeling: null, notes: null });
+  eq(await q.getOpenSession(ostore), null, "avslutat pass är inte längre öppet");
+
+  // Samma 6-timmarsfönster som getCurrentSession — ett glömt pass ska inte stå
+  // öppet i dagar.
+  const o2 = await q.startSession(ostore, ogyms[0].id);
+  await q.logSet(ostore, {
+    sessionId: o2.id, exerciseId: obar, machineId: null, weightKg: 70, reps: 8, setIndex: 1,
+  });
+  eq((await q.getOpenSession(ostore)).id, o2.id, "nystartat pass är öppet");
+  oclock += 7 * 3600_000;
+  eq(await q.getOpenSession(ostore), null, "efter sex timmar räknas passet inte som pågående");
+  eq(
+    await q.getCurrentSession(ostore, ogyms[0].id),
+    null,
+    "getCurrentSession drar samma gräns — de får aldrig ge olika svar",
+  );
+
   console.log("Maskinen skapas när den används");
   const hmEx = await q.createExercise(hstore, {
     name: "Bröstpress", type: "machine", weightUnit: "total", weightStep: 5,

@@ -27,16 +27,11 @@ import {
   startOfWeekIso,
   toMonthKey,
 } from "@/lib/dates";
-import { fmtVolume, fmtWeight } from "@/lib/format";
+import { feelingLabel, fmtVolume, fmtWeight } from "@/lib/format";
 import { colors, radius, tint } from "@/lib/theme";
 
 type Pb = { name: string; weightKg: number; deltaKg: number };
 
-const FEELING_LABEL: Record<string, string> = {
-  latt: "Lätt",
-  lagom: "Lagom",
-  tungt: "Tungt",
-};
 
 /** Hur många månader bakåt snittet får bygga på. */
 const COMPARE_MONTHS = 6;
@@ -222,7 +217,7 @@ export default function InsightsScreen() {
                     >
                       {s.sets} set · {s.exercises}{" "}
                       {s.exercises === 1 ? "övning" : "övningar"} · {fmtVolume(s.volumeKg)}
-                      {s.feeling ? ` · ${FEELING_LABEL[s.feeling]}` : ""}
+                      {s.feeling ? ` · ${feelingLabel(s.feeling)}` : ""}
                     </Text>
                     {s.notes ? (
                       <Text

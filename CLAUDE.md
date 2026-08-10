@@ -19,6 +19,9 @@ Vid konflikt vinner principen. De kommer från kravspecen och är hela poängen 
    numeriskt fält. +/– är fortfarande huvudvägen och det enda man *behöver*; genvägen finns
    för hoppet från 20 till 60 kg, som annars är fyrtio tryck. Appen tvingar aldrig fram den.
 3. **Fungerar helt offline.** Gymkällare har usel täckning. Nät är en bonus, aldrig ett krav.
+   **Skärpning 2026-08-10:** din loggbok är din och ligger lokalt. Det du väljer att *publicera*
+   till en grupp är ett tillval ovanpå — och connected-delarna får aldrig stå i vägen för att
+   logga ett set utan täckning. Se `docs/CONNECTED.md`.
 4. **Programmet växer fram.** Det finns ingen "skapa program"-vy. Maskiner läggs till när de
    används, inte i förväg.
 5. **Tummen når allt.** Alla interaktiva element i nedre tredjedelen av skärmen.
@@ -444,9 +447,10 @@ uttryckligen om färre funktioner hellre än fler.
 
 Veckoraden ur Skärm 5 byggdes först i Följ upp men **togs bort igen** — sju rutor svarar på
 "vilka dagar", inte på "hur går det", och månadsbrickorna gör jobbet bättre. Återinför den inte.
-- **Delning och beröm** — dela resultat/planer med familjen och kunna säga "bra jobbat".
-  Efterfrågat 2026-08-04. Obs: det bryter mot "var sin egen loggbok, ingen backend" och kräver
-  ett eget designbeslut innan något byggs. Se även "Bygg inte detta" nedan.
+- **Connected steg 1 — dela utan konto** (`docs/CONNECTED.md`): rutin/PB som text via iOS
+  delningsblad, klistra-in-import, JSON-export till Filer. Ingen server, inga konton ⇒ OTA.
+  Mäter om delning faktiskt används innan backendkostnaden tas. Steg 2 (konto + grupp) kräver
+  ett EAS-bygge — bunta konfigändringar dit.
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
   taggen exponerar ett läsbart maskin-ID ersätter det hela OCR-steget.
@@ -461,9 +465,21 @@ Veckoraden ur Skärm 5 byggdes först i Följ upp men **togs bort igen** — sju
 
 ## Bygg inte detta
 Medvetet bortvalt, skyddar mot scope creep: vilotimer, kroppsvikt/mått/kroppssammansättning
-(hör hemma i Stegvis — håll gränsen skarp), **delning och jämförelse med andra**, kondition och
-kroppsviktsövningar, inloggning/konto/molnsync, övningsinstruktioner och videor (QR-koden på
-maskinen leder redan dit), automatisk viktrekommendation.
+(hör hemma i Stegvis — håll gränsen skarp), kondition och kroppsviktsövningar, **full
+molnsync av loggboken**, övningsinstruktioner och videor (QR-koden på maskinen leder redan
+dit), automatisk viktrekommendation.
+
+### Ändrat beslut 2026-08-10: delning är utrett och planerat
+"Delning och jämförelse med andra" och "inloggning/konto" stod tidigare här. Efter testarnas
+feedback är frågan utredd i **`docs/CONNECTED.md`**: delning byggs som ett **tillval**, i etapper,
+med **valfritt konto** och grupp — loggboken stannar lokal.
+
+Läs det dokumentet innan något connected byggs. De tre reglerna som inte får tummas på:
+**inga `set_entry` på servern**, delade rutiner bär **namn och aldrig lokala id:n**, och servern
+tolkar aldrig träningsdata (det är det som håller gym-/maskinidentifiering borta från backenden).
+
+**Full molnsync är fortfarande bortvalt** — det löser inget av det som efterfrågats och flyttar
+hela historiken till en server.
 
 ### Ändrat beslut 2026-08-03: gamification är INTE längre bortvalt
 Kravspecen listade "sociala funktioner/delning/streaks" som en punkt. **Thomas har delat den
@@ -473,14 +489,37 @@ punkten:** progression mot sig själv — veckoring, volymjämförelse, PB-chip,
 Det som fortfarande är bortvalt är **det sociala**: att dela pass, se andras data eller jämföra
 sig med någon annan. Varje familjemedlem har sin egen lokala loggbok, och det står fast.
 
-> **Öppen fråga 2026-08-04:** Thomas har efterfrågat att kunna dela resultat och planer och ge
-> varandra beröm. Det är en direkt konflikt med "ingen backend, ingen sync" — bygg det inte
-> som en sidoeffekt av något annat. Det kräver ett eget beslut om var datan ska ta vägen.
+> **Besvarad 2026-08-10:** frågan om delning är utredd i **`docs/CONNECTED.md`**. Kort: att dela
+> framgångar, byta pass och boka ihop kräver *inte* att loggboken lämnar telefonen — det räcker
+> med härledda händelser man aktivt publicerar. Därför byggs det som ett tillval med valfritt
+> konto, i etapper, med backend i reza. Jämförelse av kilon mellan olika personers maskiner är
+> fortfarande meningslös och byggs inte.
 
 Riv alltså inte veckoringen, PB-chippet eller nivåvyn som scope creep — de är beställda.
 Ton B gäller för all sådan copy: inga utropstecken, ingen coach, och **positiv återkoppling får
 bara påstå saker som är sanna ur datan** (därför visas t.ex. "dina vanliga dagar" inte alls när
 underlaget är under fyra pass).
+
+## Kodgranskning 2026-08-10 — kvarvarande fynd
+Åtgärdat i samma omgång: `getOpenSession` (ersatte gym-loopen i startvyn och avsluta-vyn),
+`capitalize`/`feelingLabel` i `lib/format.ts` (låg dubblerade i fyra skärmar), och en
+ErrorBoundary i `app/_layout.tsx`. Det här står kvar, medvetet:
+
+- **`app/(tabs)/index.tsx` (~570 rader) och `app/log/[exerciseId].tsx` (~700)** blandar två
+  skärmar respektive mycket animationslogik. Värda att dela upp — men **gör det när de ändå
+  ska ändras**, inte som egen övning. Churn utan funktionsvärde är en risk i sig här.
+- **`lib/db/queries.ts` (~1 900 rader)** fungerar som "all SQL på ett ställe". Dela per domän
+  när connected-arbetet börjar; kom då ihåg att uppdatera `PURE_SOURCES` i
+  `scripts/verify-db.cjs`, annars kompileras inte de nya filerna till testet.
+- **Ingen kraschrapportering.** Svep-kraschen upptäcktes för att familjen hörde av sig.
+  ErrorBoundary fångar JS-fel och visar `RELEASE` — men **inte** native-kraschar. Sentry kräver
+  en native-modul; ta den när nästa bygge ändå görs (connected steg 2), inte tidigare.
+- **Backup:** expo-sqlite-databasen ligger i appens Documents och följer med i iCloud-/
+  enhetsbackup. Det är alltså inte helt oskyddat i dag — men JSON-exporten i connected steg 1
+  är ändå värd det, eftersom den är användarstyrd och flyttbar mellan telefoner.
+- **`laga-app` (annat repo):** deklarerar fortfarande `nativewind` med caret och räddas bara av
+  sin package-lock. En ren ominstallation där går i samma fälla som kostade gymma ett trasigt
+  TestFlight-bygge. En-rads-pin rekommenderas — egen PR i det repot.
 
 ## Kommunikation
 Thomas föredrar svenska. Förklara steg-för-steg med "varför", inte bara "vad". Ge

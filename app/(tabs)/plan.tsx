@@ -18,9 +18,8 @@ import {
 import { MonthCalendar } from "@/components/MonthCalendar";
 import { Button, Chip, Empty, Loading, SectionLabel } from "@/components/ui";
 import { describeDay, monthName, toDayKey } from "@/lib/dates";
+import { capitalize } from "@/lib/format";
 import { colors, radius } from "@/lib/theme";
-
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * "Planera" — sparade ordningar av övningar.
