@@ -405,3 +405,71 @@ export function NumberPrompt({
     </Modal>
   );
 }
+
+/**
+ * Fritextanteckning för en övning i en plan — målvikt, grepp, saker att tänka på.
+ *
+ * Tangentbordet är helt i sin ordning här: designprincip 2 förbjuder det
+ * *mellan set*, inte när man sitter och planerar. Anteckningen läses sedan i
+ * loggvyn, aldrig skrivs där.
+ *
+ * Tom text är ett giltigt svar och betyder "ta bort anteckningen" —
+ * `setRoutineItemNote` gör om den till NULL.
+ */
+export function NotePrompt({
+  open,
+  title,
+  value,
+  onSubmit,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  value: string | null;
+  onSubmit: (next: string) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+
+  // Öppna alltid med det som faktiskt är sparat, inte med förra radens text —
+  // samma resonemang som i NumberPrompt.
+  useEffect(() => {
+    if (open) setText(value ?? "");
+  }, [open, value]);
+
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable className="flex-1 items-center justify-center bg-black/70 px-8" onPress={onClose}>
+        <Pressable
+          className="w-full border border-line bg-card"
+          style={{ borderRadius: radius.xl, paddingHorizontal: 20, paddingVertical: 22 }}
+        >
+          <Text className="text-xs font-semibold uppercase tracking-widest text-muted">
+            {title}
+          </Text>
+
+          <TextInput
+            value={text}
+            onChangeText={setText}
+            multiline
+            autoFocus
+            placeholder="Målvikt, grepp, saker att tänka på…"
+            placeholderTextColor={colors.muted}
+            className="mt-3 border-b border-line text-ink"
+            style={{ fontSize: 16, lineHeight: 22, minHeight: 92, paddingBottom: 8 }}
+            textAlignVertical="top"
+          />
+
+          <View className="mt-6 flex-row gap-2">
+            <View className="flex-1">
+              <Button label="Avbryt" variant="ghost" onPress={onClose} />
+            </View>
+            <View className="flex-1">
+              <Button label="Spara" onPress={() => onSubmit(text)} />
+            </View>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}

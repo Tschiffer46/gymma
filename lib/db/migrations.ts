@@ -203,4 +203,17 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE planned_day ADD COLUMN routine_id TEXT REFERENCES routine(id);
   `,
+
+  // 8 — fritextanteckning per övning i en plan.
+  //
+  // Målvikt, grepp, saker att tänka på. Ligger på `routine_item` och INTE på
+  // `exercise`, eftersom samma övning kan behöva olika anteckning i olika
+  // planer ("målvikt 60 i det här blocket"). Priset är att anteckningen inte
+  // syns i ett fritt pass — det är ett medvetet val, inte ett förbiseende.
+  //
+  // Skiljs från `machine.seat_settings`, som är en egenskap hos den fysiska
+  // maskinen på ett visst gym. Den här hör till planen.
+  `
+  ALTER TABLE routine_item ADD COLUMN note TEXT;
+  `,
 ];

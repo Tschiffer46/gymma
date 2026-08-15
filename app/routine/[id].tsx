@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import {
   addRoutineItem,
@@ -10,11 +11,13 @@ import {
   moveRoutineItem,
   removeRoutineItem,
   renameRoutine,
+  setRoutineItemNote,
   useStore,
   type RoutineDetail,
+  type RoutineItem,
 } from "@/lib/db";
 import { ExercisePicker } from "@/components/ExercisePicker";
-import { Button, Empty, IconButton, Loading, SectionLabel } from "@/components/ui";
+import { Button, Empty, IconButton, Loading, NotePrompt, SectionLabel } from "@/components/ui";
 import { muscleNames } from "@/lib/muscles";
 import { colors } from "@/lib/theme";
 
@@ -33,6 +36,7 @@ export default function RoutineScreen() {
   const [routine, setRoutine] = useState<RoutineDetail | null>(null);
   const [name, setName] = useState("");
   const [picking, setPicking] = useState(false);
+  const [noting, setNoting] = useState<RoutineItem | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -73,6 +77,12 @@ export default function RoutineScreen() {
   async function add(exerciseId: string) {
     Haptics.selectionAsync();
     await addRoutineItem(store, id, exerciseId);
+    await load();
+  }
+
+  async function saveNote(itemId: string, note: string) {
+    setNoting(null);
+    await setRoutineItemNote(store, itemId, note);
     await load();
   }
 
@@ -125,6 +135,12 @@ export default function RoutineScreen() {
 
         <View className="mt-7">
           <SectionLabel>Övningar i ordning</SectionLabel>
+          {routine.items.length > 0 && (
+            <Text className="mb-1 mt-1.5 text-[13px] leading-[18px] text-muted">
+              Tryck på en övning för att lägga till en anteckning — målvikt, grepp, saker att
+              tänka på. Den visas i loggvyn när du kör planen.
+            </Text>
+          )}
           {routine.items.length === 0 ? (
             <Empty
               icon="list"
@@ -145,14 +161,37 @@ export default function RoutineScreen() {
                   >
                     {index + 1}
                   </Text>
-                  <View className="flex-1 py-3 pr-2">
+                  {/* Tryckytan är texten, inte en fjärde knapp: tre IconButtons
+                      plus namnet fyller redan raden på en telefon. */}
+                  <Pressable
+                    onPress={() => setNoting(item)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Anteckning för ${item.exercise.name}`}
+                    className="flex-1 py-3 pr-2 active:opacity-60"
+                  >
                     <Text className="text-[16px] font-semibold text-ink" numberOfLines={1}>
                       {item.exercise.name}
                     </Text>
                     <Text className="mt-0.5 text-[12.5px] text-muted" numberOfLines={1}>
                       {muscleNames(item.exercise.primaryMuscles) || "Ingen muskelgrupp satt"}
                     </Text>
-                  </View>
+                    {item.note !== null && (
+                      <View className="mt-1.5 flex-row items-start gap-1.5">
+                        <Feather
+                          name="file-text"
+                          size={12}
+                          color={colors.accent}
+                          style={{ marginTop: 2 }}
+                        />
+                        <Text
+                          className="flex-1 text-[12.5px] leading-[17px] text-muted"
+                          numberOfLines={2}
+                        >
+                          {item.note}
+                        </Text>
+                      </View>
+                    )}
+                  </Pressable>
 
                   <IconButton
                     icon="chevron-up"
@@ -207,6 +246,14 @@ export default function RoutineScreen() {
         exclude={routine.items.map((i) => i.exercise.id)}
         onPick={add}
         onClose={() => setPicking(false)}
+      />
+
+      <NotePrompt
+        open={noting !== null}
+        title={noting?.exercise.name ?? ""}
+        value={noting?.note ?? null}
+        onSubmit={(note) => noting && saveNote(noting.id, note)}
+        onClose={() => setNoting(null)}
       />
     </SafeAreaView>
   );

@@ -121,6 +121,15 @@ export type RoutineItem = {
   id: string;
   position: number;
   exercise: Exercise;
+  /**
+   * Fritext för just den här övningen i just den här planen — målvikt, grepp,
+   * saker att tänka på.
+   *
+   * Ligger på raden och inte på övningen, så samma övning kan bära olika
+   * anteckning i olika planer. Tom anteckning sparas som `null`, aldrig som
+   * tom sträng, så "har anteckning" är en entydig fråga.
+   */
+  note: string | null;
 };
 
 export type RoutineDetail = Routine & { items: RoutineItem[] };

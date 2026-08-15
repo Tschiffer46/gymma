@@ -1625,8 +1625,10 @@ export async function getRoutine({ db }: Store, id: string): Promise<RoutineDeta
   );
   if (!row) return null;
 
-  const items = await db.getAllAsync<ExerciseRow & { item_id: string; position: number }>(
-    `SELECT e.*, i.id AS item_id, i.position
+  const items = await db.getAllAsync<
+    ExerciseRow & { item_id: string; position: number; note: string | null }
+  >(
+    `SELECT e.*, i.id AS item_id, i.position, i.note
      FROM routine_item i
      JOIN exercise e ON e.id = i.exercise_id
      WHERE i.routine_id = ? AND i.deleted_at IS NULL AND e.deleted_at IS NULL
@@ -1636,8 +1638,56 @@ export async function getRoutine({ db }: Store, id: string): Promise<RoutineDeta
 
   return {
     ...toRoutine(row),
-    items: items.map((r) => ({ id: r.item_id, position: r.position, exercise: toExercise(r) })),
+    items: items.map((r) => ({
+      id: r.item_id,
+      position: r.position,
+      exercise: toExercise(r),
+      note: r.note,
+    })),
   };
+}
+
+/**
+ * Sätter (eller rensar) anteckningen på en övning i en plan.
+ *
+ * Tom text sparas som `NULL`, aldrig som tom sträng. Det gör "har den här raden
+ * en anteckning?" till en entydig fråga i både SQL och UI — annars måste varje
+ * anropsplats komma ihåg att trimma och jämföra med "".
+ */
+export async function setRoutineItemNote(
+  { db, now }: Store,
+  itemId: string,
+  note: string,
+): Promise<void> {
+  const trimmed = note.trim();
+  const t = now();
+  await db.runAsync("UPDATE routine_item SET note = ?, updated_at = ? WHERE id = ?", [
+    trimmed.length > 0 ? trimmed : null,
+    t,
+    itemId,
+  ]);
+}
+
+/**
+ * Anteckningen för en övning i en viss plan — det loggvyn behöver.
+ *
+ * Bara den plan passet faktiskt följer får svara. Kör man ett pass med plan A
+ * ska plan B:s anteckning för samma övning inte dyka upp; anteckningen hör till
+ * planen, inte till övningen.
+ */
+export async function routineItemNote(
+  { db }: Store,
+  routineId: string,
+  exerciseId: string,
+): Promise<string | null> {
+  const row = await db.getFirstAsync<{ note: string | null }>(
+    `SELECT i.note
+     FROM routine_item i
+     JOIN routine r ON r.id = i.routine_id AND r.deleted_at IS NULL
+     WHERE i.routine_id = ? AND i.exercise_id = ? AND i.deleted_at IS NULL`,
+    [routineId, exerciseId],
+  );
+  return row?.note ?? null;
 }
 
 /**
