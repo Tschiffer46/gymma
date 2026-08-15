@@ -362,6 +362,7 @@ function ActiveSession({ session }: { session: Session }) {
   const [gymName, setGymName] = useState("");
   const [routineName, setRoutineName] = useState<string | null>(null);
   const [planIds, setPlanIds] = useState<string[]>([]);
+  const [noteIds, setNoteIds] = useState<Set<string>>(new Set());
   const [skipped, setSkipped] = useState<string[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -386,6 +387,9 @@ function ActiveSession({ session }: { session: Session }) {
       setRoutineName(r?.name ?? null);
       ids = r?.items.map((i) => i.exercise.id) ?? [];
       setPlanIds(ids);
+      // Anteckningarna följer redan med i getRoutine, så indikatorn i listan
+      // kostar inget extra anrop.
+      setNoteIds(new Set(r?.items.filter((i) => i.note !== null).map((i) => i.exercise.id)));
     }
 
     // Planens övningar skickas med så de syns även om maskinen inte står på
@@ -505,6 +509,7 @@ function ActiveSession({ session }: { session: Session }) {
             <ExerciseRow
               item={item}
               skipped={skippedSet.has(item.exercise.id)}
+              hasNote={noteIds.has(item.exercise.id)}
               onToggleSkip={inPlanMode ? () => toggleSkip(item.exercise.id) : undefined}
               onPress={() =>
                 router.push({

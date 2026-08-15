@@ -376,6 +376,66 @@ async function main() {
   eq(detail.items.length, 2, "raden försvinner");
   eq(detail.items.map((i) => i.position).join(","), "0,1", "positionerna packas ihop");
 
+  console.log("Anteckning per övning i planen");
+  // Egen rutin: stegen nedan tar bort och lägger tillbaka rader, och ska inte
+  // rubba ordningsantagandena i testerna ovan.
+  const noteRoutine = await q.createRoutine(store, "Anteckningar");
+  for (const id of seededIds) await q.addRoutineItem(store, noteRoutine, id);
+  let noted = await q.getRoutine(store, noteRoutine);
+  eq(noted.items[0].note, null, "en ny rad börjar utan anteckning");
+
+  await q.setRoutineItemNote(store, noted.items[0].id, "  Målvikt 60 kg, brett grepp  ");
+  noted = await q.getRoutine(store, noteRoutine);
+  eq(noted.items[0].note, "Målvikt 60 kg, brett grepp", "anteckningen sparas trimmad");
+  eq(noted.items[1].note, null, "grannraden påverkas inte");
+
+  eq(
+    await q.routineItemNote(store, noteRoutine, seededIds[0]),
+    "Målvikt 60 kg, brett grepp",
+    "loggvyn hittar anteckningen via plan och övning",
+  );
+  // Kärnan i valet att lägga anteckningen på raden och inte på övningen: samma
+  // övning ska kunna bära olika anteckning i olika planer.
+  eq(
+    await q.routineItemNote(store, routineId, seededIds[0]),
+    null,
+    "samma övning i en annan plan bär inte anteckningen",
+  );
+  eq(
+    await q.routineItemNote(store, noteRoutine, exId),
+    null,
+    "en övning utanför planen ger null",
+  );
+
+  // Tom text betyder "ta bort". Blir den tom sträng i stället för NULL måste
+  // varje anropsplats komma ihåg att jämföra med "" — då spricker det förr.
+  await q.setRoutineItemNote(store, noted.items[0].id, "   ");
+  noted = await q.getRoutine(store, noteRoutine);
+  eq(noted.items[0].note, null, "blank text rensar anteckningen till NULL");
+
+  await q.setRoutineItemNote(store, noted.items[2].id, "Sittdyna hål 3");
+  await q.moveRoutineItem(store, noted.items[2].id, "up");
+  noted = await q.getRoutine(store, noteRoutine);
+  eq(noted.items[1].exercise.id, seededIds[2], "raden flyttade sig");
+  eq(noted.items[1].note, "Sittdyna hål 3", "anteckningen följer med raden vid omordning");
+
+  await q.removeRoutineItem(store, noted.items[1].id);
+  await q.addRoutineItem(store, noteRoutine, seededIds[2]);
+  noted = await q.getRoutine(store, noteRoutine);
+  eq(
+    noted.items.find((i) => i.exercise.id === seededIds[2]).note,
+    null,
+    "borttagen och återlagd övning börjar om utan anteckning",
+  );
+
+  await q.setRoutineItemNote(store, noted.items[0].id, "Ska försvinna med planen");
+  await q.deleteRoutine(store, noteRoutine);
+  eq(
+    await q.routineItemNote(store, noteRoutine, seededIds[0]),
+    null,
+    "en raderad plan ger ingen anteckning",
+  );
+
   console.log("Maskin i plan som saknas på gymmet");
   // exId är bröstpressen som bara står på gyms[0]. Läggs den i planen ska den
   // synas även när man kör planen på gyms[1] — annars ser planen ut att ha

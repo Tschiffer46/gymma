@@ -15,6 +15,7 @@ export function ExerciseRow({
   onPress,
   skipped,
   onToggleSkip,
+  hasNote,
 }: {
   item: ExerciseListItem;
   onPress: () => void;
@@ -22,6 +23,14 @@ export function ExerciseRow({
   skipped?: boolean;
   /** Sätts bara i planläget — överhoppning hör ihop med en plan att avvika från. */
   onToggleSkip?: () => void;
+  /**
+   * Övningen bär en anteckning i planen passet följer.
+   *
+   * Bara en ikon, inte texten: raden har redan fyra textrader, och själva
+   * anteckningen står stort i loggvyn ett tryck bort. Det här svarar på "finns
+   * det något att läsa här?", inget mer.
+   */
+  hasNote?: boolean;
 }) {
   const { exercise, machine, lastSets, lastPerformedAt, doneToday } = item;
   const perHand = exercise.weightUnit === "per_hand";
@@ -72,13 +81,16 @@ export function ExerciseRow({
         </View>
 
         <View className="flex-1 py-3">
-          <Text
-            className="text-[17px] font-semibold text-ink"
-            numberOfLines={1}
-            style={skipped ? { textDecorationLine: "line-through" } : undefined}
-          >
-            {exercise.name}
-          </Text>
+          <View className="flex-row items-center gap-1.5">
+            <Text
+              className="shrink text-[17px] font-semibold text-ink"
+              numberOfLines={1}
+              style={skipped ? { textDecorationLine: "line-through" } : undefined}
+            >
+              {exercise.name}
+            </Text>
+            {hasNote ? <Feather name="file-text" size={13} color={colors.accent} /> : null}
+          </View>
           {exercise.nameEn ? (
             <Text className="mt-0.5 text-[12.5px] text-muted" numberOfLines={1}>
               {exercise.nameEn}

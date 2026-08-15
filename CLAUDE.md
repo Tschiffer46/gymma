@@ -90,7 +90,7 @@ machine     id, gym_id, exercise_id, manufacturer, article_code, ocr_text,
 session     id, gym_id, routine_id?, started_at, ended_at, feeling, notes
 set_entry   id, session_id, machine_id?, exercise_id, weight_kg, reps, set_index, logged_at
 routine     id, name
-routine_item id, routine_id, exercise_id, position
+routine_item id, routine_id, exercise_id, position, note?  -- note = fritext i planen
 session_skip id, session_id, exercise_id      -- överhoppat i ETT pass
 app_setting  key, value                        -- generell nyckel/värde
 planned_day  id, day ('YYYY-MM-DD', unikt), routine_id?  -- planerade träningsdagar
@@ -197,6 +197,20 @@ fortfarande fullt ut, och det syns i tre val:
 
 **Positionerna hålls täta** (0,1,2…) av `removeRoutineItem`, vilket är det som gör
 `moveRoutineItem` till ett enkelt platsbyte med grannen. Inför man luckor går den logiken sönder.
+
+**Anteckningen ligger på raden, inte på övningen.** `routine_item.note` (migration 8) bär
+målvikt, grepp och saker att tänka på — och sitter där just för att samma övning ska kunna
+ha olika anteckning i olika planer ("målvikt 60 i det här blocket"). Följdregler:
+
+- **Tom text sparas som `NULL`, aldrig som tom sträng** (`setRoutineItemNote` trimmar). Annars
+  måste varje anropsplats komma ihåg att jämföra med `""` för att svara på "har anteckning?".
+- **Bara den plan passet faktiskt följer får bidra.** `routineItemNote(routineId, exerciseId)`
+  är det loggvyn läser; kör man plan A ska plan B:s anteckning för samma övning inte dyka upp.
+  Kör man fritt visas ingen alls — det är priset för valet ovan, inte en bugg.
+- **Anteckningen skrivs i planredigeraren, aldrig i loggvyn.** Designprincip 2 förbjuder
+  tangentbord *mellan set*; loggvyn visar anteckningen som ren läsning, ovanför vikten och
+  utanför tumzonen.
+- Skiljs från `machine.seat_settings`, som hör till den fysiska maskinen på ett visst gym.
 
 **Omordning sker med upp/ned, inte drag-and-drop.** `react-native-draggable-flatlist` och
 `react-native-reorderable-list` har öppna peer-intervall mot reanimated, men ingen av dem är
@@ -436,9 +450,41 @@ telefonen. Testa den så här:
   kraschade appen och är borttaget — se `ReanimatedSwipeable` under Gotchas.)
   Samtidigt: gym-buggen (se "viktskalor" ovan), "Lägg till övning" mitt i ett planerat pass,
   viktsteg 1 kg och tryckbara siffror i loggvyn.
+- **Anteckningar i planen** ✅ Migration 8 (`routine_item.note`): fritext per övning i en plan
+  — målvikt, grepp, saker att tänka på. Skrivs i planredigeraren (tryck på övningens namn),
+  visas som läsning i loggvyn när passet följer planen, och som `file-text`-ikon i passets
+  lista. Ny `NotePrompt` i `components/ui.tsx`. Se avsnittet under "Rutiner" ovan.
 - **Nästa** — nästa-kort under passet (lätt version av 1c: tydligt kort överst, **utan** den
   ritade banan och den pulserande noden), sedan progression per maskin och träningsfrekvens
   i Följ upp. `react-native-svg` finns redan ⇒ OTA.
+
+### Lansering på App Store — beslutat 2026-08-15
+Appen ska **kosta pengar**: 39 kr/mån, 299 kr/år, via **RevenueCat** (Purchasely-spåret är
+övergivet i båda apparna). Connected är **framskjutet** — App Store först.
+
+Två dokument bär detta. Läs dem innan något betalrelaterat byggs:
+- **`docs/BETALNING.md`** — designen. Kärnan: **RevenueCat behöver ingen backend och inga
+  konton** (anonymt app-user-id + StoreKit + Apple-id), så betalning är helt frikopplat från
+  Connected. Provperioden är **appstyrd, 30 dagar, utan betalkort** — inte Apples
+  introduktionserbjudande. Regeln som inte får tummas på: **paywallen får aldrig hålla din
+  egen loggbok som gisslan** — läsa historik och exportera ska fungera för alltid.
+- **`docs/APP-STORE-CHECKLIST.md`** — portalstegen i beroendeordning.
+
+**Två blockerare som inte är kod:**
+1. **App Store-namnet är `Gymma (08b912)`** — det är den *publika* titeln, inte ett internt
+   id. Måste bytas mot ett ledigt namn före inskick. `expo.name` ("Gymma") är opåverkat,
+   hemskärmen behöver inget unikt namn.
+2. **Ikonen är fortfarande platshållaren** från `make-icon.cjs`.
+
+**Native-omgången — allt i EN commit** (fingerprint-ekonomin ovan): `react-native-purchases`
++ paywall, `expo-notifications` + påminnelse kvällen innan en planerad dag, Sentry, riktig
+ikon, **uppdaterat `withPrivacyManifest.js`** (RevenueCat samlar köpdata ⇒ "Data Not
+Collected" blir fel — vanlig avslagsanledning). Plus JSON-export, som blir ett *löfte* i och
+med att vi tar betalt.
+
+⚠️ **`react-native-purchases` deklarerar `react-native >= 0.73`** — samma sorts öppna
+peer-intervall som gav `ReanimatedSwipeable`-kraschen. **Kör i iOS-simulatorn på Macen före
+TestFlight.**
 
 ### Bortvalt ur designspecen (beslutat 2026-08-03)
 `docs/design/gymma-polering-spec.md` beskriver mer än vi bygger. **Celebration-överlägget
@@ -451,6 +497,8 @@ Veckoraden ur Skärm 5 byggdes först i Följ upp men **togs bort igen** — sju
   delningsblad, klistra-in-import, JSON-export till Filer. Ingen server, inga konton ⇒ OTA.
   Mäter om delning faktiskt används innan backendkostnaden tas. Steg 2 (konto + grupp) kräver
   ett EAS-bygge — bunta konfigändringar dit.
+  **Framskjutet 2026-08-15:** App Store-lanseringen går först. JSON-exporten bryts dock ut och
+  tidigareläggs, eftersom betalmodellen gör datahållbarhet till ett löfte (`docs/BETALNING.md`).
 - **Sprint 3** — kamera + OCR (`expo-camera` + `expo-text-extractor`, Apples Vision on-device) +
   fuzzy-matchning + disambigueringsvy. **Undersök NFC/QR på Technogym-skylten först** — om
   taggen exponerar ett läsbart maskin-ID ersätter det hela OCR-steget.

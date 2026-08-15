@@ -23,6 +23,7 @@ import {
   getOrOpenSession,
   lastSets,
   logSet,
+  routineItemNote,
   setsInSession,
   setWeightStep,
   useStore,
@@ -98,6 +99,7 @@ export default function LogScreen() {
   const [reps, setReps] = useState(10);
   const [step, setStep] = useState(5);
   const [flash, setFlash] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [typing, setTyping] = useState<"weight" | "reps" | null>(null);
   const [loading, setLoading] = useState(true);
@@ -131,12 +133,18 @@ export default function LogScreen() {
         machineId: m?.id ?? null,
       });
       const fill = prefillFor(inSession.length + 1, previous, inSession, ex);
+      // Bara den plan passet faktiskt följer får bidra med anteckning. Kör man
+      // fritt, eller en annan plan, ska ingen dyka upp.
+      const planNote = cur?.routineId
+        ? await routineItemNote(store, cur.routineId, ex.id)
+        : null;
 
       if (cancelled) return;
       setExercise(ex);
       setMachine(m);
       setPrev(previous);
       setBest(record);
+      setNote(planNote);
       setSession(cur);
       setSets(inSession);
       setStep(weightStepFor(ex, m));
@@ -314,6 +322,28 @@ export default function LogScreen() {
           ))}
         </View>
       </View>
+
+      {/* Anteckningen från planen. Bara läsning — den skrivs i planredigeraren,
+          aldrig här, så designprincip 2 står orörd. Ligger under toppraden och
+          inte i tumzonen just för att den inte ska trycka undan vikten. */}
+      {note ? (
+        <View
+          className="flex-row items-start gap-2"
+          style={{
+            marginHorizontal: 18,
+            marginTop: 12,
+            paddingHorizontal: 13,
+            paddingVertical: 11,
+            borderRadius: radius.md,
+            backgroundColor: tint.accent,
+          }}
+        >
+          <Feather name="file-text" size={14} color={colors.accent} style={{ marginTop: 1.5 }} />
+          <Text style={{ flex: 1, fontSize: 13.5, lineHeight: 19, color: colors.ink }}>
+            {note}
+          </Text>
+        </View>
+      ) : null}
 
       {/* 2. Mitten — en siffra i fokus */}
       <View className="flex-1 items-center justify-center px-6">
